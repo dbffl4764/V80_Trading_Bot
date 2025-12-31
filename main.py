@@ -4,6 +4,7 @@ import pandas as pd
 import time
 from dotenv import load_dotenv
 
+# 환경 변수 로드
 load_dotenv(dotenv_path='/home/dbffl4764/V80_Trading_Bot/.env')
 
 def get_exchange():
@@ -14,47 +15,85 @@ def get_exchange():
         'options': {'defaultType': 'future'}
     })
 
-# 무시할 메이저 키워드
+# 3000불 미만일 때 무시할 메이저 키워드
 MAJORS_KEYWORDS = ['BTC', 'ETH', 'SOL', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'SUI', 'APT']
 
 def get_dynamic_watchlist(exchange, total_balance):
+    """±15% 이상 변동성 종목 추출 및 메이저 필터링"""
     try:
-        # fetch_tickers가 간혹 누락될 수 있어 fetch_markets 데이터와 조합
         tickers = exchange.fetch_tickers()
         volatile_candidates = []
         
         for symbol, t in tickers.items():
-            # 필터링 조건 대폭 완화: USDT가 포함된 모든 시장 데이터 확인
-            if 'USDT' in symbol:
-                # 데이터가 None인 경우 건너뜀
+            if 'USDT' in symbol and ":" not in symbol:
                 pct = t.get('percentage')
                 if pct is None: continue
                 
                 change_percent = float(pct)
                 
-                # 🔥 15% 이상 변동성 체크
+                # 🔥 사용자 원칙: ±15% 이상 변동성 체크
                 if abs(change_percent) >= 15:
                     # 자산 3000불 미만 시 메이저 무시
                     if total_balance < 3000:
-                        # 종목명에 메이저 키워드가 포함되면 무시
                         if any(m in symbol for m in MAJORS_KEYWORDS):
                             continue
-                    
                     volatile_candidates.append({'symbol': symbol, 'change': change_percent})
 
-        # 변동성 큰 순서대로 정렬
         sorted_list = sorted(volatile_candidates, key=lambda x: abs(x['change']), reverse=True)
         return [m['symbol'] for m in sorted_list[:15]]
     except Exception as e:
         print(f"⚠️ 리스트 생성 에러: {e}")
         return []
 
-# check_v80_signal, execute_v80_trade 함수는 기존 통합본과 동일하게 유지
+def check_v80_signal(exchange, symbol):
+    """V80 핵심 엔진: 5분봉 5/20/60 이동평균선 정배열 분석"""
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
+        if not ohlcv: return "RETRY"
+        df = pd.DataFrame(ohlcv, columns=['ts', 'o', 'h', 'l', 'c', 'v'])
+        df['c'] = df['c'].astype(float)
+        
+        ma5 = df['c'].rolling(5).mean().iloc[-1]
+        ma20 = df['c'].rolling(20).mean().iloc[-1]
+        ma60 = df['c'].rolling(60).mean().iloc[-1]
+        
+        # 정배열 상승 (롱) / 역배열 하락 (숏)
+        if ma5 > ma20 > ma60: return "LONG"
+        if ma5 < ma20 < ma60: return "SHORT"
+        return "WAIT"
+    except: return "RETRY"
+
+def execute_v80_trade(exchange, symbol, signal, max_slots):
+    """자산별 슬롯 제한 준수 매매 실행"""
+    try:
+        balance = exchange.fetch_balance()
+        pos_info = exchange.fetch_positions()
+        active_positions = [p for p in pos_info if float(p.get('contracts', 0)) != 0]
+        
+        if len(active_positions) >= max_slots: return
+
+        ticker = exchange.fetch_ticker(symbol)
+        price = float(ticker['last'])
+        
+        # 레버리지 설정 (5000불 이상 15배, 나머지 5배)
+        leverage = 15 if price >= 5000 else 5
+        exchange.set_leverage(leverage, symbol)
+
+        # 자산의 10% 진입
+        total_usdt = balance.get('total', {}).get('USDT', 0)
+        entry_budget = (total_usdt * 0.1) * leverage
+        amount = exchange.amount_to_precision(symbol, entry_budget / price)
+        
+        side = 'buy' if signal == 'LONG' else 'sell'
+        print(f"🚀 [진입 성공] {symbol} {signal} | 레버리지 {leverage}배")
+        exchange.create_market_order(symbol, side, amount)
+    except Exception as e:
+        print(f"❌ 매매 실행 에러: {e}")
 
 if __name__ == "__main__":
     exchange = get_exchange()
     print("------------------------------------------")
-    print("🚀 V80 [진짜 15% 필터] 엔진 재가동")
+    print("🚀 V80 스나이퍼 통합 가동 (±15% 필터)")
     print("------------------------------------------")
     
     while True:
@@ -62,26 +101,25 @@ if __name__ == "__main__":
             balance = exchange.fetch_balance()
             total_balance = balance.get('total', {}).get('USDT', 0)
             
-            # 15% 필터 적용 리스트
             watch_list = get_dynamic_watchlist(exchange, total_balance)
             
-            # 자산별 슬롯
+            # 자산별 슬롯 원칙 (3000불 미만 1개)
             max_slots = 1 if total_balance < 3000 else 2
 
-            print(f"\n[잔고: {total_balance:.1f}$] 변동성 15% 이상 종목 {len(watch_list)}개 발견")
+            print(f"\n[잔고: {total_balance:.1f}$] 변동성 15% 이상 종목 {len(watch_list)}개 발견 (슬롯: {max_slots})")
             
             for symbol in watch_list:
                 signal = check_v80_signal(exchange, symbol)
-                # 현재 등락률도 같이 표기하도록 로그 강화 ㅡㅡ;ㅋ
+                # 현재 등락률 표시 추가
                 ticker = exchange.fetch_ticker(symbol)
-                cur_pct = ticker.get('percentage', 0)
-                print(f"[{time.strftime('%H:%M:%S')}] 🔥 {symbol:15} ({cur_pct}%): {signal}")
+                pct = ticker.get('percentage', 0)
+                print(f"[{time.strftime('%H:%M:%S')}] 🔥 {symbol:15} ({pct:+.1f}%): {signal}")
                 
                 if signal in ["LONG", "SHORT"]:
                     execute_v80_trade(exchange, symbol, signal, max_slots)
-                time.sleep(0.3)
+                time.sleep(0.5)
             
             time.sleep(5)
         except Exception as e:
             print(f"⚠️ 시스템 루프 에러: {e}")
-            time.sleep(5)
+            time.sleep(10)
