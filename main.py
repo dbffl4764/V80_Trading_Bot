@@ -4,6 +4,7 @@ import pandas as pd
 import time
 from dotenv import load_dotenv
 
+# API 키 및 환경변수 로드
 load_dotenv(dotenv_path='/home/dbffl4764/V80_Trading_Bot/.env')
 
 def get_exchange():
@@ -14,36 +15,38 @@ def get_exchange():
         'options': {'defaultType': 'future'}
     })
 
-# 👑 메이저 코인 명단 (3000불 이상일 때만 활성화됨)
+# 👑 봇의 기억 속에 있는 메이저 명단 (무시는 하지만 삭제는 안 함!)
 MAJORS = [
     'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT',
     'DOGE/USDT', 'AVAX/USDT', 'LINK/USDT', 'SUI/USDT', 'APT/USDT'
 ]
 
 def get_dynamic_watchlist(exchange, total_balance):
-    """자산이 3000불 미만이면 메이저를 무시하고 잡코인 10개만 추출"""
+    """사용자 자산 상태에 따라 사냥감을 결정하는 로직"""
     try:
         tickers = exchange.fetch_tickers()
-        alts_candidates = []
+        candidates = []
         
+        # 1. 모든 종목을 훑으면서 메이저가 아닌 놈들 중 등락률 후보군 수집
         for symbol, t in tickers.items():
             if symbol.endswith('/USDT') and ":" not in symbol:
-                # 메이저는 등락률 순위(TOP 10)에서 제외하고 따로 관리
                 if symbol not in MAJORS:
                     change = abs(float(t['percentage']))
-                    alts_candidates.append({'symbol': symbol, 'change': change})
+                    candidates.append({'symbol': symbol, 'change': change})
 
-        # 등락률 큰 순서대로 잡코인 10개 선정
-        sorted_alts = sorted(alts_candidates, key=lambda x: x['change'], reverse=True)
-        top_alts = [m['symbol'] for m in sorted_alts[:10]]
+        # 2. 등락률(절대값)이 가장 큰 잡코인 10개 추출
+        sorted_alts = sorted(candidates, key=lambda x: x['change'], reverse=True)
+        top_10_alts = [m['symbol'] for m in sorted_alts[:10]]
 
-        # [핵심] 자산이 3000불 이상일 때만 메이저를 감시 리스트에 포함 (그 전엔 무시)
-        if total_balance >= 3000:
-            return MAJORS + top_alts
+        # [핵심] 자산이 3,000불 미만이면 메이저를 '무시'하고 잡코인만 리턴!
+        if total_balance < 3000:
+            return top_10_alts
         
-        return top_alts # 3000불 미만이면 오직 🔥잡코인 10개만!
+        # 자산이 3,000불 이상이면? 그제서야 메이저 10개를 감시 리스트에 포함!
+        return MAJORS + top_10_alts
+        
     except Exception as e:
-        print(f"⚠️ 리스트 갱신 에러: {e}")
+        print(f"⚠️ 데이터 갱신 실패: {e}")
         return []
 
 def check_v80_signal(exchange, symbol):
@@ -61,42 +64,41 @@ def check_v80_signal(exchange, symbol):
         return "WAIT"
     except: return "RETRY"
 
-# ... (execute_v80_trade 함수 등 생략)
+# ... (execute_v80_trade 함수 등 기존 매매 로직 포함)
 
 if __name__ == "__main__":
     exchange = get_exchange()
     print("------------------------------------------")
-    print("🏰 V80 스마트 자산 관리 시스템 가동")
-    print("💰 3000불 미만: 메이저 코인 '무시' 모드")
+    print("🚀 V80 성장형 사령부 가동 (3000$ 미만 메이저 무시)")
     print("------------------------------------------")
     
     while True:
         try:
-            # 1. 실시간 잔고 확인
+            # 1. 현재 내 자산 확인
             balance = exchange.fetch_balance()
             total_balance = balance['total']['USDT']
             
-            # 2. 잔고에 따른 유동적 감시 리스트 생성
+            # 2. 자산에 따른 유동적 타겟 선정
             watch_list = get_dynamic_watchlist(exchange, total_balance)
             
-            # 3. 자산별 동시 진입 슬롯 설정 (사용자 원칙)
+            # 3. 자산 규모별 최대 진입 슬롯 설정 (2000불 1개, 3000불 2개 등)
             if total_balance < 3000: max_slots = 1
             elif total_balance < 5000: max_slots = 2
             elif total_balance < 10000: max_slots = 3
             else: max_slots = 5
 
-            print(f"\n[자산: {total_balance:.1f}$] {len(watch_list)}개 종목 추적 중 (최대 {max_slots}종목)")
+            print(f"\n[잔고: {total_balance:.1f}$] {len(watch_list)}개 종목 추적 중 (최대 {max_slots}슬롯)")
             
             for symbol in watch_list:
                 signal = check_v80_signal(exchange, symbol)
                 icon = "👑" if symbol in MAJORS else "🔥"
                 print(f"[{time.strftime('%H:%M:%S')}] {icon} {symbol:12} : {signal}")
                 
-                # 매매 로직 (생략 - 슬롯 제한 및 수익 30% 격리 포함)
+                # 매매 로직 (슬롯 여유 있을 때만 진입)
                 # if signal in ["LONG", "SHORT"]: execute_v80_trade(...)
                 
                 time.sleep(0.5)
             time.sleep(3)
         except Exception as e:
-            print(f"⚠️ 루프 에러: {e}")
+            print(f"⚠️ 에러 발생: {e}")
             time.sleep(5)
