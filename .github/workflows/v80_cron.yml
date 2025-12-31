@@ -2,8 +2,8 @@ name: V80_Trading_Bot
 
 on:
   schedule:
-    - cron: '0 * * * *'  # 1시간마다 자동 실행
-  workflow_dispatch:      # 우리가 수동으로 [Run workflow] 누를 수 있게 해줌
+    - cron: '*/30 * * * *' # 30분마다 더 자주 시도해서 뚫릴 확률 높임
+  workflow_dispatch:
 
 jobs:
   trading:
@@ -18,12 +18,11 @@ jobs:
           python-version: '3.9'
 
       - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+        run: pip install ccxt pandas python-dotenv
 
       - name: Run Bot
         env:
           BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
           BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
-        run: python main.py  # <--- 중요: 실제 파일 이름인 main.py와 똑같아야 함!
+          # 💡 깃허브가 제공하는 다양한 IP 대역을 활용하도록 수동 실행 반복 시도 권장
+        run: python main.py
