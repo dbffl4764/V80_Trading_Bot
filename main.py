@@ -14,12 +14,8 @@ def get_exchange():
         'options': {'defaultType': 'future'}
     })
 
-# 👑 봇의 기억 속에 있는 메이저 (무시 대상)
-MAJORS = [
-    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT',
-    'DOGE/USDT', 'AVAX/USDT', 'LINK/USDT', 'SUI/USDT', 'APT/USDT',
-    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT' # 변종 이름 대비
-]
+# 👑 메이저 명단 (3000불 미만이면 무시 대상)
+MAJORS_KEYWORDS = ['BTC', 'ETH', 'SOL', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'SUI', 'APT']
 
 def get_dynamic_watchlist(exchange, total_balance):
     try:
@@ -27,26 +23,32 @@ def get_dynamic_watchlist(exchange, total_balance):
         candidates = []
         
         for symbol, t in tickers.items():
-            # 필터 완화: USDT가 포함된 모든 선물 종목 대상
-            if 'USDT' in symbol:
-                # 3000불 미만일 때는 메이저 이름이 포함된 종목 무시 ㅡㅡ;
+            # 1. USDT 선물 페어만 필터링
+            if 'USDT' in symbol and ":" not in symbol:
+                
+                # [에러 방지] 데이터가 비어있는 종목은 무시 (None 체크)
+                if t['percentage'] is None or t['last'] is None:
+                    continue
+                
+                # 2. 자산 3000불 미만일 때 메이저 무시 로직
                 if total_balance < 3000:
-                    if any(m in symbol for m in ['BTC', 'ETH', 'SOL', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'SUI', 'APT']):
+                    if any(m in symbol for m in MAJORS_KEYWORDS):
                         continue
                 
-                # 나머지 잡코인들은 등락률 후보에 추가
-                change = abs(float(t['percentage']))
-                candidates.append({'symbol': symbol, 'change': change})
+                # 3. 정상 데이터만 후보군에 추가
+                try:
+                    change = abs(float(t['percentage']))
+                    candidates.append({'symbol': symbol, 'change': change})
+                except (ValueError, TypeError):
+                    continue
 
-        # 등락률 큰 순서대로 정렬
-        sorted_list = sorted(candidates, key=lambda x: x['change'], reverse=True)
-        top_10 = [m['symbol'] for m in sorted_list[:10]]
-
-        # 자산 3000불 이상일 때만 메이저 추가
-        if total_balance >= 3000:
-            return list(set(MAJORS[:10] + top_10))
+        # 등락률 큰 순서대로 정렬해서 10개 선정
+        if not candidates:
+            return []
             
-        return top_10 # 200불일 땐 무조건 이거!
+        sorted_list = sorted(candidates, key=lambda x: x['change'], reverse=True)
+        return [m['symbol'] for m in sorted_list[:10]]
+        
     except Exception as e:
         print(f"⚠️ 리스트 갱신 에러: {e}")
         return []
@@ -54,6 +56,7 @@ def get_dynamic_watchlist(exchange, total_balance):
 def check_v80_signal(exchange, symbol):
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
+        if not ohlcv: return "RETRY"
         df = pd.DataFrame(ohlcv, columns=['ts', 'o', 'h', 'l', 'c', 'v'])
         df['c'] = df['c'].astype(float)
         ma5 = df['c'].rolling(5).mean().iloc[-1]
@@ -67,31 +70,28 @@ def check_v80_signal(exchange, symbol):
 if __name__ == "__main__":
     exchange = get_exchange()
     print("------------------------------------------")
-    print("🏰 V80 0개 탈출 엔진 가동")
+    print("🏰 V80 0개 탈출 & 에러 수정 엔진 가동")
     print("------------------------------------------")
     
     while True:
         try:
             balance = exchange.fetch_balance()
             total_balance = balance['total']['USDT']
+            
+            # 메이저 무시 로직이 담긴 리스트 호출
             watch_list = get_dynamic_watchlist(exchange, total_balance)
             
-            # 자산 규모별 슬롯
-            max_slots = 1 if total_balance < 3000 else 2
-
             print(f"\n[잔고: {total_balance:.1f}$] {len(watch_list)}개 종목 추적 중...")
             
-            if not watch_list:
-                print("👀 아직도 0개면 API 데이터를 다시 확인해야 합니다.")
+            if len(watch_list) == 0:
+                print("👀 데이터 긁어오는 중... 잠시만 기다려주세요.")
             
             for symbol in watch_list:
                 signal = check_v80_signal(exchange, symbol)
-                icon = "🔥"
-                print(f"[{time.strftime('%H:%M:%S')}] {icon} {symbol:15} : {signal}")
-                # 매매 로직은 기존 함수 활용 (execute_v80_trade)
+                print(f"[{time.strftime('%H:%M:%S')}] 🔥 {symbol:15} : {signal}")
                 time.sleep(0.1)
             
             time.sleep(5)
         except Exception as e:
-            print(f"⚠️ 시스템 에러: {e}")
+            print(f"⚠️ 메인 루프 에러: {e}")
             time.sleep(5)
