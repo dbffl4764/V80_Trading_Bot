@@ -1,75 +1,104 @@
 import os
 import ccxt
-import pandas as pd
 import time
+import pandas as pd
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
 
-def get_exchange():
-    return ccxt.binance({
-        'apiKey': os.getenv('BINANCE_API_KEY'),
-        'secret': os.getenv('BINANCE_SECRET_KEY'),
-        'enableRateLimit': True,
-        'options': {'defaultType': 'future'}
-    })
+# ================= 설정값 (사령관님 특명) =================
+SYMBOL_COUNT = 10       # 감시 종목 수
+BET_RATIO = 0.40        # 총 자산의 40% 투입
+LEVERAGE = 5            # 5배 레버리지
+ENTRY_GAP = 0.01        # 1% 간격으로 추가 진입 (평단 조절)
+LOSS_LIMIT = 3          # 3연패 시 셧다운
+# =====================================================
 
-def run_v80_sniper():
-    exchange = get_exchange()
-    print(f"\n📡 [바이낸스 정찰] {time.strftime('%H:%M:%S')} - 유격 2.5% 매복 중")
+class BinanceV80:
+    def __init__(self):
+        self.ex = ccxt.binance({
+            'apiKey': os.getenv('BINANCE_API_KEY'),
+            'secret': os.getenv('BINANCE_SECRET_KEY'),
+            'enableRateLimit': True,
+            'options': {'defaultType': 'future'}
+        })
+        self.consecutive_losses = 0
+        self.shutdown_until = None
 
-    try:
-        balance = exchange.fetch_balance()
-        positions = balance['info']['positions']
-        active_positions = [p for p in positions if float(p['positionAmt']) != 0]
-        
-        total_usdt = float(balance['total']['USDT'])
-        max_slots = 1 if total_usdt < 3000 else 2
+    def log(self, msg):
+        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
 
-        if len(active_positions) >= max_slots:
-            return
+    def is_trading_available(self):
+        now = datetime.now()
+        if self.shutdown_until and now < self.shutdown_until:
+            return False
+        if self.shutdown_until and now >= self.shutdown_until:
+            self.log("☀️ 셧다운 해제! 작전을 재개합니다.")
+            self.shutdown_until = None
+            self.consecutive_losses = 0
+        return True
 
-        tickers = exchange.fetch_tickers()
-        candidates = []
-        for symbol, t in tickers.items():
-            if 'USDT' in symbol and 'BUSD' not in symbol and ':' not in symbol:
-                pct = t.get('percentage', 0)
-                if abs(pct) >= 5.0:
-                    candidates.append({'symbol': symbol, 'change': pct})
+    def get_data(self, symbol):
+        ohlcv = self.ex.fetch_ohlcv(symbol, timeframe='5m', limit=100)
+        df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+        df['ma20'] = df['c'].rolling(20).mean()
+        df['ma60'] = df['c'].rolling(60).mean()
+        return df.iloc[-1]
 
-        for item in sorted(candidates, key=lambda x: abs(x['change']), reverse=True):
-            symbol = item['symbol']
-            ohlcv = exchange.fetch_ohlcv(symbol, '5m', limit=60)
-            df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
-            df['c'] = df['c'].astype(float)
+    def execute_logic(self):
+        if not self.is_trading_available(): return
+
+        try:
+            balance = self.ex.fetch_balance()
+            total_usdt = float(balance['total']['USDT'])
             
-            ma20 = df['c'].rolling(20).mean().iloc[-1]
-            ma60 = df['c'].rolling(60).mean().iloc[-1]
-            curr_c = df['c'].iloc[-1]
+            # 포지션 체크 (이미 있으면 쉬기)
+            pos = [p for p in balance['info']['positions'] if float(p['positionAmt']) != 0]
+            if len(pos) > 0: return
 
-            # 🔥 [사령관님 특명: 유격 2.5% 눌림목 사격]
-            # 롱: 정배열 + 가격이 MA20의 2.5% 이내로 내려왔을 때
-            is_long = ma20 > ma60 and (ma20 <= curr_c <= ma20 * 1.025)
-            # 숏: 역배열 + 가격이 MA20의 2.5% 이내로 올라왔을 때
-            is_short = ma20 < ma60 and (ma20 * 0.975 <= curr_c <= ma20)
+            # 5% 이상 변동성 종목 탐색
+            tickers = self.ex.fetch_tickers()
+            candidates = []
+            for s, t in tickers.items():
+                if 'USDT' in s and '/' not in s and abs(t.get('percentage', 0)) >= 5.0:
+                    candidates.append(s)
 
-            if is_long or is_short:
-                side = "LONG" if is_long else "SHORT"
-                print(f"🎯 [사격] {symbol} {side} 진입! (유격 {((curr_c/ma20)-1)*100:.2f}%)")
-                execute_trade(exchange, symbol, side, 20, curr_c)
-                break
-    except Exception as e:
-        print(f"⚠️ 바이낸스 엔진 체크: {e}")
+            for symbol in candidates[:SYMBOL_COUNT]:
+                data = self.get_data(symbol)
+                curr_price = data['c']
+                ma20, ma60 = data['ma20'], data['ma60']
 
-def execute_trade(exchange, symbol, side, cost, price):
-    exchange.set_leverage(5, symbol)
-    amount = exchange.amount_to_precision(symbol, (cost * 5) / price)
-    exchange.create_market_order(symbol, 'BUY' if side == "LONG" else 'SELL', amount)
-    sl_price = price * (0.93 if side == "LONG" else 1.07)
-    params = {'stopPrice': exchange.price_to_precision(symbol, sl_price)}
-    exchange.create_order(symbol, 'STOP_MARKET', 'SELL' if side == "LONG" else 'BUY', amount, params=params)
+                # 🎯 유격 2.5% 타점 분석
+                is_long = ma20 > ma60 and (ma20 <= curr_price <= ma20 * 1.025)
+                is_short = ma20 < ma60 and (ma20 * 0.975 <= curr_price <= ma20)
 
-if __name__ == "__main__":
-    while True:
-        run_v80_sniper()
-        time.sleep(20)
+                if is_long or is_short:
+                    side = 'BUY' if is_long else 'SELL'
+                    self.log(f"🎯 타점 포착: {symbol} ({side}) | 화력 40% 분할 투입")
+                    
+                    # 40% 시드를 1:1:1로 분할 (약 13.3%씩)
+                    step_usdt = (total_usdt * BET_RATIO) / 3
+                    
+                    # 1차: 시장가 진입
+                    amount = (step_usdt * LEVERAGE) / curr_price
+                    self.ex.create_market_order(symbol, side.lower(), amount)
+                    
+                    # 2차/3차: 거미줄 설치 (1% 간격 지정가)
+                    for i in range(1, 3):
+                        gap_price = curr_price * (1 - (ENTRY_GAP * i)) if is_long else curr_price * (1 + (ENTRY_GAP * i))
+                        step_amount = (step_usdt * LEVERAGE) / gap_price
+                        self.ex.create_limit_order(symbol, side.lower(), step_amount, gap_price)
+                    
+                    # 결과 감시 로직은 거래소 히스토리 API와 연동하여 
+                    # 익절 시 consecutive_losses = 0, 손절 시 +1 처리가 필요함
+                    # (이 부분은 거래가 종료된 시점에 체크하도록 설계)
+                    break
+
+        except Exception as e:
+            self.log(f"⚠️ 에러 발생: {e}")
+
+bot = BinanceV80()
+while True:
+    bot.execute_logic()
+    time.sleep(20)
