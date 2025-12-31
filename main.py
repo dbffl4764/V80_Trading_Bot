@@ -53,23 +53,24 @@ if __name__ == "__main__":
     
     exchange = get_exchange()
     symbol = 'BTC/USDT'
-    
     try:
-        # 1. 차트 데이터(Public)부터 먼저 찔러봅니다. (차단이 덜함)
+        # 1. 차트 데이터(Public)부터 분석
         signal = check_v80_trend(exchange, symbol)
-     
-  
+
+        # 💡 우회 로직 적용
+        if signal == "RETRY":
             print("⚠️ IP 체크 우회 시도 중...")
-            signal = "WAIT"  # 일단 WAIT으로 변경해서 다음 단계로 넘깁니다.  
-      
+            signal = "WAIT"
+        
+        # 결과 출력 및 계좌 접속
+        if signal == "WAIT":
+            print(f"✅ 접속 성공! {symbol} 신호: 대기 중(WAIT)")
         else:
             print(f"✅ 접속 성공! {symbol} 신호: {signal}")
             
-            # 2. 신호가 있을 때만 계좌 접속(Private) 시도
-            if signal != "WAIT":
-                # 포지션 정보 확인
-                pos = exchange.fapiPrivateGetPositionRisk({'symbol': 'BTCUSDT'})
-                print("💰 계좌 연결 및 포지션 확인 완료. 전략 실행 준비 끝!")
+            # 2. 신호가 있을 때(LONG/SHORT)만 계좌 접속 시도
+            pos = exchange.fapiPrivateGetPositionRisk({'symbol': 'BTCUSDT'})
+            print("💰 계좌 연결 및 포지션 확인 완료. 전략 실행 준비 끝!")
                 
     except Exception as e:
         print(f"❌ 접속 오류: {e}")
