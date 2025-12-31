@@ -2,8 +2,10 @@ import os
 import ccxt
 import pandas as pd
 import random
+import time
 from dotenv import load_dotenv
 
+# .env 파일 로드
 load_dotenv()
 
 def get_exchange():
@@ -29,7 +31,7 @@ def get_exchange():
     })
 
 def check_v80_trend(exchange, symbol):
-    # 6개월, 3개월, 1개월, 1일, 12시간, 6시간 추세선 확인
+    # 사용자님의 필승 전략: 6M, 3M, 1M, 1d, 12h, 6h 추세 확인
     timeframes = ['6M', '3M', '1M', '1d', '12h', '6h']
     trends = []
     try:
@@ -47,26 +49,33 @@ def check_v80_trend(exchange, symbol):
         return "RETRY"
 
 if __name__ == "__main__":
-    print("🔥 V80 시스템 가동: 100억 고지전 시작!")
-    
-    exchange = get_exchange()
-    symbol = 'BTC/USDT'
-    
-    try:
-        # 1. 차트 데이터 분석
-        signal = check_v80_trend(exchange, symbol)
-        
-        # IP 차단 이슈 발생 시 WAIT으로 우회 진행
-        if signal == "RETRY":
-            signal = "WAIT"
-            print("⚠️ IP 체크 우회 중... 현재 신호: WAIT")
-        else:
-            print(f"✅ 접속 성공! {symbol} 현재 신호: {signal}")
+    while True:
+        try:
+            now = time.strftime('%Y-%m-%d %H:%M:%S')
+            print(f"\n[{now}] 🚀 V80 시스템 가동: 100억 고지전 분석 중...")
             
-        # 2. 신호가 있을 때만 계좌 접속 (최대 2개 자산 제한)
-        if signal != "WAIT":
-            pos = exchange.fapiPrivateGetPositionRisk({'symbol': 'BTCUSDT'})
-            print("💰 계좌 연결 및 포지션 확인 완료. 전략 실행!")
+            exchange = get_exchange()
+            symbol = 'BTC/USDT'
             
-    except Exception as e:
-        print(f"❌ 접속 오류 발생: {e}")
+            # 1. 차트 데이터 분석
+            signal = check_v80_trend(exchange, symbol)
+            
+            # IP 차단 이슈 발생 시 WAIT으로 우회 진행
+            if signal == "RETRY":
+                signal = "WAIT"
+                print("⚠️ IP 체크 우회 중... 현재 신호: WAIT")
+            else:
+                print(f"✅ 접속 성공! {symbol} 현재 신호: {signal}")
+                
+            # 2. 신호가 있을 때만 계좌 접속 (최대 2개 자산 제한)
+            if signal != "WAIT":
+                pos = exchange.fapiPrivateGetPositionRisk({'symbol': 'BTCUSDT'})
+                print(f"💰 전략 신호({signal}) 포착! 계좌 연결 및 포지션 확인 완료.")
+                # 여기에 실제 주문 로직을 추가할 수 있습니다.
+
+        except Exception as e:
+            print(f"❌ 루프 실행 중 오류 발생: {e}")
+
+        # 100억을 향한 인내: 1분마다 차트 재분석
+        print("😴 60초 대기 후 다음 분석을 시작합니다...")
+        time.sleep(60)
