@@ -4,6 +4,7 @@ import pandas as pd
 import time
 from dotenv import load_dotenv
 
+# 환경 변수 로드
 load_dotenv(dotenv_path='/home/dbffl4764/V80_Trading_Bot/.env')
 
 def get_exchange():
@@ -14,82 +15,95 @@ def get_exchange():
         'options': {'defaultType': 'future'}
     })
 
-# 👑 상시 감시 메이저 10선 (고정)
-MAJORS = [
-    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT', 'ADA/USDT',
-    'DOGE/USDT', 'AVAX/USDT', 'LINK/USDT', 'SUI/USDT', 'APT/USDT'
-]
+def get_trading_strategy(total_balance):
+    """사용자 자산 규모별 운영 원칙 적용"""
+    if total_balance < 3000:
+        # 3000불 미만: 잡코인 집중, 최대 1종목 (2000불까지 1개 원칙 포함)
+        return {'max_slots': 1, 'watch_majors': False}
+    elif total_balance < 5000:
+        # 3000불 이상: 메이저 포함, 최대 2종목
+        return {'max_slots': 2, 'watch_majors': True}
+    elif total_balance < 10000:
+        # 5000불 이상: 최대 3종목
+        return {'max_slots': 3, 'watch_majors': True}
+    else:
+        # 1만불 이상: 최대 5종목
+        return {'max_slots': 5, 'watch_majors': True}
 
-def get_top_movers(exchange, limit=10):
-    """바이낸스 선물 시장에서 메이저를 제외하고 등락률 절대값이 가장 큰 10개 추출"""
+def get_realtime_watchlist(exchange, watch_majors):
+    """등락률 상위 10개 잡코인 + 5000불 이상 메이저 필터링"""
     try:
         tickers = exchange.fetch_tickers()
-        movers = []
-        for symbol, ticker in tickers.items():
-            # USDT 선물 페어만, 메이저 제외, ':' 포함된 파생상품 제외
-            if symbol.endswith('/USDT') and symbol not in MAJORS and ":" not in symbol:
-                change = abs(float(ticker['percentage'])) # 상승/하락 폭의 절대값
-                movers.append({'symbol': symbol, 'change': change, 'raw_percent': ticker['percentage']})
+        alts = []
+        majors_5k = []
         
-        # 등락률 큰 순서대로 정렬
-        sorted_movers = sorted(movers, key=lambda x: x['change'], reverse=True)
-        return [m['symbol'] for m in sorted_movers[:limit]]
+        for symbol, t in tickers.items():
+            if not symbol.endswith('/USDT') or ":" in symbol: continue
+            
+            price = float(t['last'])
+            change = abs(float(t['percentage']))
+            
+            if price >= 5000:
+                majors_5k.append(symbol)
+            else:
+                alts.append({'symbol': symbol, 'change': change})
+
+        # 등락률 큰 순서대로 10개 추출
+        sorted_alts = sorted(alts, key=lambda x: x['change'], reverse=True)
+        top_alts = [m['symbol'] for m in sorted_alts[:10]]
+
+        if watch_majors:
+            return majors_5k + top_alts
+        return top_alts
     except Exception as e:
-        print(f"⚠️ 등락률 데이터 갱신 실패: {e}")
+        print(f"⚠️ 리스트 갱신 실패: {e}")
         return []
 
-def check_v80_signal(exchange, symbol, is_major):
-    """5분봉 5/20/60 정배열/역배열 분석"""
+def check_v80_signal(exchange, symbol):
+    """V80 핵심: 5분봉 5/20/60 정배열 분석"""
     try:
-        ticker = exchange.fetch_ticker(symbol)
-        percent = float(ticker['percentage'])
-        
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
         df = pd.DataFrame(ohlcv, columns=['ts', 'o', 'h', 'l', 'c', 'v'])
         df['c'] = df['c'].astype(float)
         
-        # 이동평균선 계산
         ma5 = df['c'].rolling(5).mean().iloc[-1]
         ma20 = df['c'].rolling(20).mean().iloc[-1]
         ma60 = df['c'].rolling(60).mean().iloc[-1]
         
-        icon = "👑" if is_major else "🔥"
-        
-        if ma5 > ma20 > ma60: return f"{icon} {percent:+.1f}%", "LONG"
-        if ma5 < ma20 < ma60: return f"{icon} {percent:+.1f}%", "SHORT"
-        return f"{icon} {percent:+.1f}%", "WAIT"
+        if ma5 > ma20 > ma60: return "LONG"
+        if ma5 < ma20 < ma60: return "SHORT"
+        return "WAIT"
     except:
-        return "⚠️ 분석중", "RETRY"
+        return "RETRY"
 
-def execute_v80_trade(exchange, symbol, signal):
-    """매매 실행 (1종목 집중 + 레버리지 차등 + 수익 30% 격리 원칙)"""
+def execute_v80_trade(exchange, symbol, signal, max_slots):
+    """자산별 슬롯 제한을 준수하는 매매 실행"""
     try:
-        # 1. 포지션 체크 (이미 있으면 추가 진입 안 함)
+        # 1. 현재 포지션 수 확인
         balance = exchange.fetch_balance()
         positions = balance['info']['positions']
         active_positions = [p for p in positions if float(p['positionAmt']) != 0]
         
-        if len(active_positions) >= 1:
-            return
+        if len(active_positions) >= max_slots:
+            return # 슬롯 꽉 차면 패스
 
-        # 2. 레버리지 설정 (메이저 15 / 잡코인 5)
-        leverage = 15 if symbol in MAJORS else 5
-        exchange.load_markets()
+        # 2. 레버리지 설정 (비트/이더 15배, 나머지 5배)
+        price = float(exchange.fetch_ticker(symbol)['last'])
+        leverage = 15 if price >= 5000 else 5
         exchange.set_leverage(leverage, symbol)
 
-        # 3. 진입 금액 설정 (200$의 10% = 20$)
+        # 3. 진입 수량 (자산의 10% 사용)
         total_usdt = balance['total']['USDT']
-        entry_budget = total_usdt * 0.1 * leverage
-        
-        ticker = exchange.fetch_ticker(symbol)
-        price = ticker['last']
+        entry_budget = (total_usdt * 0.1) * leverage
         amount = entry_budget / price
+        
+        exchange.load_markets()
         precise_amount = exchange.amount_to_precision(symbol, amount)
         
         side = 'buy' if signal == 'LONG' else 'sell'
-        print(f"\n🚀 [V80 실전 진입] {symbol} {signal} | 레버리지: {leverage}배")
+        print(f"🚀 [V80 진입] {symbol} {signal} | 슬롯({len(active_positions)+1}/{max_slots})")
         exchange.create_market_order(symbol, side, precise_amount)
-        print(f"💰 진입 완료! 수익 발생 시 30% 안전자산 격리 로직 작동 중... ㅡㅡ;\n")
+        print(f"🛡️ 수익 발생 시 30% 안전자산 격리 원칙 사수! ㅡㅡ;")
 
     except Exception as e:
         print(f"❌ 매매 오류: {e}")
@@ -97,26 +111,33 @@ def execute_v80_trade(exchange, symbol, signal):
 if __name__ == "__main__":
     exchange = get_exchange()
     print("------------------------------------------")
-    print("🏰 V80 하이브리드 스나이퍼 가동")
-    print("👑 메이저 10종: 상시 밀착 감시")
-    print("🔥 잡코인 10종: 실시간 등락률 TOP 10")
+    print("🏰 V80 자산별 전략 사령부 가동")
     print("------------------------------------------")
     
     while True:
-        # 매 루프마다 등락률 상위 잡코인을 실시간으로 갱신 (사용자 요청 반영)
-        top_alts = get_top_movers(exchange, 10)
-        current_watch = MAJORS + top_alts
-        
-        for symbol in current_watch:
-            is_major = symbol in MAJORS
-            status, signal = check_v80_signal(exchange, symbol, is_major)
+        try:
+            # 1. 내 자산 확인 및 전략 결정
+            balance = exchange.fetch_balance()
+            total_balance = balance['total']['USDT']
+            strategy = get_trading_strategy(total_balance)
             
-            print(f"[{time.strftime('%H:%M:%S')}] {symbol:12} : {status} -> {signal}")
+            # 2. 실시간 감시 종목 갱신
+            watch_list = get_realtime_watchlist(exchange, strategy['watch_majors'])
             
-            if signal in ["LONG", "SHORT"]:
-                execute_v80_trade(exchange, symbol, signal)
+            print(f"\n[잔고: {total_balance:.1f}$] {len(watch_list)}개 종목 스캔 중 (최대 {strategy['max_slots']}종목)")
             
-            time.sleep(0.5) # API 부하 방지
-        
-        print(f"--- {time.strftime('%H:%M:%S')} 스캔 완료 (20종), 5초 대기 ---")
-        time.sleep(5)
+            for symbol in watch_list:
+                signal = check_v80_signal(exchange, symbol)
+                
+                # 로그 출력 (검색은 계속함 ㅡㅡ;)
+                print(f"[{time.strftime('%H:%M:%S')}] {symbol:12} : {signal}")
+                
+                if signal in ["LONG", "SHORT"]:
+                    execute_v80_trade(exchange, symbol, signal, strategy['max_slots'])
+                
+                time.sleep(0.5)
+            
+            time.sleep(5)
+        except Exception as e:
+            print(f"⚠️ 루프 에러: {e}")
+            time.sleep(10)
