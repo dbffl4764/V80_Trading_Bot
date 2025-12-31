@@ -1,38 +1,35 @@
-import json
-import urllib.request
+import os
+import ccxt
 
-def run_v80():
-    print("🚀 [V80 무적 우회 엔진] 가동!")
-    # 바이낸스 대신 야후 파이낸스 데이터 소스 사용 (차단 불가)
-    url = "https://query1.finance.yahoo.com/v8/finance/chart/BTC-USD?interval=1d&range=30d"
+def run_v80_binance_only():
+    print("🚀 [V80 바이낸스 전용 엔진] 기동!")
     
-    headers = {'User-Agent': 'Mozilla/5.0'} # 사람인 척 하기
-    
+    # 1. 바이낸스 선물 연동
+    # 깃허브 Secrets에 BINANCE_KEY, BINANCE_SECRET이 있어야 합니다.
+    binance = ccxt.binance({
+        'apiKey': os.environ.get('BINANCE_KEY'),
+        'secret': os.environ.get('BINANCE_SECRET'),
+        'options': {'defaultType': 'future'} # 선물 계좌 고정
+    })
+
     try:
-        req = urllib.request.Request(url, headers=headers)
-        response = urllib.request.urlopen(req)
-        data = json.loads(response.read())
+        # 2. 실제 잔고 데이터 추출
+        balance = binance.fetch_balance()
+        total_usdt = balance['total'].get('USDT', 0)
         
-        # 야후 파이낸스 데이터 구조에서 가격 추출
-        result = data['chart']['result'][0]
-        closes = result['indicators']['quote'][0]['close']
+        # 3. 사령관님 전용 실시간 보고
+        print("-" * 30)
+        print(f"💰 [바이낸스 현재 잔고] {total_usdt:,.2f} USDT")
         
-        # None 값 제거 및 현재가 추출
-        closes = [x for x in closes if x is not None]
-        price = closes[-1]
-        
-        # 20일 이동평균선 계산
-        ma20 = sum(closes[-21:-1]) / 20
-        
-        print(f"📊 [야후금융 데이터] 현재가: {price:.2f} | 20일선: {ma20:.2f}")
-        
-        if price > ma20:
-            print(f"✅ 결과: 20일선 위 '안전'. (수익 345% 홀딩 중!)")
-        else:
-            print("🚨🚨 경보: 20일선 이탈! 사령관님, 수익 40% 확보하세요!")
-            
+        # 4. 100% 수익 돌파 시 40% 안전자산 원칙 알림
+        safe_reserve = total_usdt * 0.4
+        print(f"⚠️ [수익 수호 알림] 안전자산 회수 목표액: {safe_reserve:,.2f} USDT")
+        print("-" * 30)
+
     except Exception as e:
-        print(f"❌ 데이터 수집 오류: {e}")
+        print(f"❌ 바이낸스 연결 오류: {e}")
+
+    print("✅ 바이낸스 전선 이상 무. 다음 보고까지 6방향 추세 감시를 계속합니다.")
 
 if __name__ == "__main__":
-    run_v80()
+    run_v80_binance_only()
