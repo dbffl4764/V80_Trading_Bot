@@ -41,20 +41,15 @@ if __name__ == "__main__":
     print("🔥 V80 시스템 가동: 100억 고지전 시작!")
     exchange = get_exchange()
     symbol = 'BTC/USDT'
-    
     try:
         signal = check_v80_trend(exchange, symbol)
-        
-        # 💡 차단 로직 우회 및 신호 강제 변환
         if signal == "RETRY":
             signal = "WAIT"
             print("✅ 접속 성공! (차단 우회 모드)")
         else:
             print(f"✅ 접속 성공! {symbol} 현재 신호: {signal}")
-
         if signal != "WAIT":
             pos = exchange.fapiPrivateGetPositionRisk({'symbol': 'BTCUSDT'})
-            print(f"💰 계좌 연결 성공! 전략 실행 준비 끝!")
-            
+            print("💰 계좌 연결 성공! 전략 실행 준비 끝!")
     except Exception as e:
         print(f"❌ 접속 오류 발생: {e}")
