@@ -9,17 +9,15 @@ env_path = '/home/dbffl4764/V80_Trading_Bot/.env'
 load_dotenv(dotenv_path=env_path)
 
 def get_exchange():
-    # 바이낸스 선물 전용 설정을 강제합니다.
     return ccxt.binance({
         'apiKey': os.getenv('BINANCE_API_KEY'),
         'secret': os.getenv('BINANCE_SECRET_KEY'),
         'enableRateLimit': True,
-        'options': {'defaultType': 'future'} # 선물 거래소 강제 설정
+        'options': {'defaultType': 'future'}
     })
 
 def check_v80_trend(exchange, symbol):
     try:
-        # 1시간봉(60분) 기준으로 5/20/60 이평선 체크
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe='1h', limit=100)
         df = pd.DataFrame(ohlcv, columns=['ts', 'o', 'h', 'l', 'c', 'v'])
         df['c'] = df['c'].astype(float)
@@ -29,7 +27,6 @@ def check_v80_trend(exchange, symbol):
         ma60 = df['c'].rolling(window=60).mean().iloc[-1]
         current_price = df['c'].iloc[-1]
         
-        # 5분봉 단기 추세
         ohlcv_5m = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=10)
         last_5m_close = float(ohlcv_5m[-1][4])
         
@@ -45,11 +42,12 @@ def check_v80_trend(exchange, symbol):
 
 def execute_trade(exchange, symbol, signal):
     try:
-        # 잔고 조회
+        # 1. 잔고 및 마켓 정보 로드
+        exchange.load_markets()
         balance = exchange.fetch_balance()
         total_usdt = balance['total']['USDT']
         
-        # 포지션 확인 (2,000$ 미만 시 1종목 집중)
+        # 2. 포지션 확인 (2,000$ 미만 시 1종목 집중)
         positions = exchange.fetch_positions([symbol])
         active_positions = [p for p in positions if float(p['contracts']) != 0]
         
@@ -58,17 +56,21 @@ def execute_trade(exchange, symbol, signal):
             print(f"⚠️ 원칙: {total_usdt:.2f}$ 기준 {limit_count}종목 제한 중.")
             return
 
+        # 3. 진입 금액 계산 (10%)
         entry_budget = total_usdt * 0.1
         ticker = exchange.fetch_ticker(symbol)
         price = ticker['last']
+        
+        # [핵심] 수량 정밀도 계산: 바이낸스 규격에 맞게 수량을 다듬습니다.
         amount = entry_budget / price
+        precise_amount = exchange.amount_to_precision(symbol, amount)
         
         side = 'buy' if signal == 'LONG' else 'sell'
-        print(f"🚀 [V80 실전] {symbol} {signal} 진입! (예산: {entry_budget:.2f} USDT)")
+        print(f"🚀 [V80 실전] {symbol} {signal} 진입 시도! (수량: {precise_amount})")
         
-        # 시장가 주문 실행
-        order = exchange.create_market_order(symbol, side, amount)
-        print(f"✅ 주문 성공: {order['id']}")
+        # 4. 시장가 주문 실행
+        order = exchange.create_market_order(symbol, side, precise_amount)
+        print(f"✅ 주문 성공! ID: {order['id']}")
         print(f"💰 수익 발생 시 30% 안전자산 격리 가동!")
         
     except Exception as e:
@@ -79,7 +81,7 @@ if __name__ == "__main__":
     symbol = 'BTC/USDT'
     
     print("------------------------------------------")
-    print("💰 V80 [5/20/60] 엔진 정상화 완료")
+    print("💰 V80 [5/20/60] 엔진 - 수량 정밀도 패치 완료")
     print("------------------------------------------")
     
     while True:
