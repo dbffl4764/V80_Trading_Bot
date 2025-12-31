@@ -1,16 +1,13 @@
+
 import os
 import time
 import ccxt
+import pandas as pd
 from dotenv import load_dotenv
 
-# 사용자 정의 모듈 불러오기
-from v80_logic import check_trend
-from v80_trade import safety_transfer, get_open_positions_count
-
-# 1. 환경 변수 로드 (API 키)
+# 1. 설정 및 환경 변수 로드
 load_dotenv()
 
-# 2. 바이낸스 선물 거래소 설정
 exchange = ccxt.binance({
     'apiKey': os.getenv('BINANCE_API_KEY'),
     'secret': os.getenv('BINANCE_SECRET_KEY'),
@@ -18,44 +15,75 @@ exchange = ccxt.binance({
     'enableRateLimit': True
 })
 
-# 3. 설정값
-TARGET_SYMBOLS = ['BTC/USDT', 'ETH/USDT'] # 거래 종목
-MAX_POSITIONS = 2  # 최대 2개 종목 제한
+# 사용자님의 핵심 원칙
+TARGET_SYMBOLS = ['BTC/USDT', 'ETH/USDT']
+MAX_POSITIONS = 2 
 
-def run_bot():
-    print("💰 [V80 전략] 봇 가동 시작 - 100억 목표!")
+# --- [전략 로직: v80_logic 역할] ---
+def check_v80_trend(symbol):
+    """6개월, 3개월, 1개월, 1일, 12시간, 6시간 추세 일치 확인"""
+    timeframes = ['6M', '3M', '1M', '1d', '12h', '6h']
+    trends = []
+    
+    try:
+        for tf in timeframes:
+            ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=30)
+            df = pd.DataFrame(ohlcv, columns=['ts', 'o', 'h', 'l', 'c', 'v'])
+            ma20 = df['c'].rolling(window=20).mean().iloc[-1]
+            current_price = df['c'].iloc[-1]
+            trends.append(current_price > ma20)
+            
+        if all(trends): return "LONG"
+        if not any(trends): return "SHORT"
+        return "WAIT"
+    except:
+        return "ERROR"
+
+# --- [자산 관리: v80_trade 역할] ---
+def get_current_positions():
+    """현재 열린 포지션 개수 확인"""
+    balance = exchange.fetch_balance()
+    positions = balance['info']['positions']
+    active_positions = [p for p in positions if float(p['positionAmt']) != 0]
+    return len(active_positions)
+
+def safety_asset_transfer(profit_usd, profit_pct):
+    """수익금 30% (100% 초과시 40%) 안전자산 이체"""
+    if profit_usd <= 0: return
+    ratio = 0.4 if profit_pct >= 1.0 else 0.3
+    amount = profit_usd * ratio
+    try:
+        exchange.transfer("USDT", amount, "future", "spot")
+        print(f"💰 안전자산 이체 완료: {amount:.2f} USDT ({int(ratio*100)}%)")
+    except Exception as e:
+        print(f"❌ 이체 실패: {e}")
+
+# --- [메인 실행 루프] ---
+def run_trading_bot():
+    print("🚀 V80 통합 봇 가동 (100억 프로젝트)")
     
     while True:
         try:
-            # 현재 열린 포지션 개수 확인
-            current_count = get_open_positions_count(exchange)
-            print(f"\n--- 현재 포지션 수: {current_count} / {MAX_POSITIONS} ---")
+            pos_count = get_current_positions()
+            print(f"\n[체크] 현재 포지션: {pos_count}/{MAX_POSITIONS}")
 
             for symbol in TARGET_SYMBOLS:
-                # 포지션이 이미 2개면 더 이상 분석 안 함
-                if current_count >= MAX_POSITIONS:
+                if pos_count >= MAX_POSITIONS:
                     break
                 
-                # 6개 타임프레임 추세 체크 (v80_logic 호출)
-                signal = check_trend(exchange, symbol)
-                print(f"🔍 {symbol} 분석: {signal}")
+                signal = check_v80_trend(symbol)
+                print(f"🔍 {symbol} 분석 결과: {signal}")
 
-                if signal == "LONG":
-                    print(f"🚀 {symbol} 모든 추세 상승! LONG 진입 실행")
-                    # 여기에 실제 매수 코드 추가 가능
-                    
-                elif signal == "SHORT":
-                    print(f"🔻 {symbol} 모든 추세 하락! SHORT 진입 실행")
-                    # 여기에 실제 매도 코드 추가 가능
+                if signal in ["LONG", "SHORT"]:
+                    print(f"🔥 {signal} 진입 신호 발생!")
+                    # 실제 주문 코드 예시: 
+                    # exchange.create_market_order(symbol, signal.lower(), amount)
 
-            # 수익 정산 예시 (포지션 종료 시점에 실행되도록 설정 필요)
-            # 만약 수익이 났다면 safety_transfer(exchange, 수익금, 수익률) 호출
-
-            time.sleep(60 * 5) # 5분마다 반복 실행
+            time.sleep(60 * 5) # 5분마다 반복
             
         except Exception as e:
-            print(f"⚠️ 에러 발생: {e}")
+            print(f"⚠️ 실행 중 에러: {e}")
             time.sleep(30)
 
 if __name__ == "__main__":
-    run_bot()
+    run_trading_bot()
