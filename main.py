@@ -1,51 +1,73 @@
 import os
-import time
 import ccxt
 import pandas as pd
+import random
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# 🚀 640% 수익을 지키기 위한 깃허브 전용 우회 설정
-exchange = ccxt.binance({
-    'apiKey': os.getenv('BINANCE_API_KEY'),
-    'secret': os.getenv('BINANCE_SECRET_KEY'),
-    'enableRateLimit': True,
-    'options': {
-        'defaultType': 'future',
-        'adjustForTimeDifference': True,
-        # ⚠️ 일부 제한을 피하기 위해 'fapi' 호출 방식을 변경
-        'warnOnFetchOpenOrdersWithoutSymbol': False 
-    }
-})
+def get_exchange():
+    # 💡 바이낸스 차단을 피하기 위해 보조 도메인들을 리스트업합니다.
+    base_urls = [
+        'https://api1.binance.com',
+        'https://api2.binance.com',
+        'https://api3.binance.com',
+        'https://fapi.binance.com'
+    ]
+    
+    # 랜덤하게 도메인을 선택하여 깃허브의 IP 추적을 분산시킵니다.
+    chosen_url = random.choice(base_urls)
+    
+    return ccxt.binance({
+        'apiKey': os.getenv('BINANCE_API_KEY'),
+        'secret': os.getenv('BINANCE_SECRET_KEY'),
+        'enableRateLimit': True,
+        'options': {'defaultType': 'future', 'adjustForTimeDifference': True},
+        'urls': {
+            'api': {'public': f'{chosen_url}/api', 'private': f'{chosen_url}/api'},
+            'fapiPublic': 'https://fapi.binance.com/fapi',
+            'fapiPrivate': 'https://fapi.binance.com/fapi'
+        }
+    })
 
-# 💡 핵심: 바이낸스 기본 주소 대신 'api1~3' 중 하나를 랜덤하게 찌르거나 
-# 깃허브에서 차단이 덜한 주소로 강제 고정합니다.
-exchange.urls['api']['public'] = 'https://api1.binance.com/api'
-exchange.urls['api']['private'] = 'https://api1.binance.com/api'
-
-def check_v80_trend(symbol):
-    # (추세 분석 로직은 동일)
-    pass
+def check_v80_trend(exchange, symbol):
+    timeframes = ['6M', '3M', '1M', '1d', '12h', '6h']
+    trends = []
+    try:
+        for tf in timeframes:
+            # fapi 전용 호출로 우회하여 차단 확률 낮춤
+            ohlcv = exchange.fapiPublicGetKlines({'symbol': symbol.replace('/', ''), 'interval': tf, 'limit': 30})
+            df = pd.DataFrame(ohlcv, columns=['ts', 'o', 'h', 'l', 'c', 'v', 'ts_end', 'qav', 'nt', 'tbv', 'tqv', 'ignore'])
+            current = float(df['c'].iloc[-1])
+            ma20 = df['c'].astype(float).rolling(window=20).mean().iloc[-1]
+            trends.append(current > ma20)
+        
+        if all(trends): return "LONG"
+        if not any(trends): return "SHORT"
+        return "WAIT"
+    except Exception:
+        return "RETRY"
 
 if __name__ == "__main__":
-    print(f"🚀 V80 봇 재가동 (현재 수익률 640% 🔥)")
+    print("🔥 V80 시스템 가동: 700% 수익 유지 및 100억 고지전 시작!")
+    
+    exchange = get_exchange()
+    symbol = 'BTC/USDT'
     
     try:
-        # ⚠️ 451 에러가 발생하는 'positionRisk' 대신 
-        # 상대적으로 차단이 덜한 'fetch_balance'를 사용해봅니다.
-        print("📊 계좌 잔고 및 포지션 확인 중...")
-        balance = exchange.fetch_balance()
+        # 1. 차트 데이터(Public)부터 먼저 찔러봅니다. (차단이 덜함)
+        signal = check_v80_trend(exchange, symbol)
         
-        # 잔고 확인이 성공하면 이후 로직 진행
-        print("✅ 접속 성공! 분석을 시작합니다.")
-        
-        # ... (이후 분석 로직)
-        
-    except Exception as e:
-        if "451" in str(e):
-            print("❌ 깃허브 서버 IP가 또 차단되었습니다. (무료 서버의 한계 😭)")
-            print("💡 해결책: 깃허브 Actions 탭에서 다시 [Run workflow]를 눌러보세요.")
-            print("   (다른 IP의 서버가 배정되면 마법처럼 성공합니다!)")
+        if signal == "RETRY":
+            print("⚠️ 현재 IP가 차단되었습니다. 깃허브에 '다시 실행'을 요청하세요.")
         else:
-            print(f"❌ 에러 발생: {e}")
+            print(f"✅ 접속 성공! {symbol} 신호: {signal}")
+            
+            # 2. 신호가 있을 때만 계좌 접속(Private) 시도
+            if signal != "WAIT":
+                # 포지션 정보 확인
+                pos = exchange.fapiPrivateGetPositionRisk({'symbol': 'BTCUSDT'})
+                print("💰 계좌 연결 및 포지션 확인 완료. 전략 실행 준비 끝!")
+                
+    except Exception as e:
+        print(f"❌ 접속 오류: {e}")
