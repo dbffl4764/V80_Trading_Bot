@@ -4,7 +4,17 @@ import os
 
 def run_v80():
     print("🚀 [V80 24시간 감시 시스템] 가동!")
-    bot = ccxt.binance()
+   # 기존 코드
+# bot = ccxt.binance()
+
+# 수정 코드 (제한 구역 우회 시도)
+bot = ccxt.binance({
+    'urls': {
+        'api': {
+            'public': 'https://api1.binance.com/api/v3', # 주소를 api1, api2, api3로 바꿔가며 시도 가능
+        }
+    }
+})
     try:
         ohlcv = bot.fetch_ohlcv("BTC/USDT", timeframe='1d', limit=30)
         df = pd.DataFrame(ohlcv, columns=['ts', 'o', 'h', 'l', 'c', 'v'])
