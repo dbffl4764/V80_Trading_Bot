@@ -4,6 +4,7 @@ import pandas as pd
 import time
 from dotenv import load_dotenv
 
+# 환경 변수 로드
 load_dotenv(dotenv_path='/home/dbffl4764/V80_Trading_Bot/.env')
 
 def get_exchange():
@@ -14,51 +15,112 @@ def get_exchange():
         'options': {'defaultType': 'future'}
     })
 
-def check_v80_strict_signal(exchange, symbol):
-    """
-    사용자 원칙: 크로스 후 3~5봉 지점 (엄격 모드)
-    5/20/60 선이 정렬되고, 선들 사이의 간격이 벌어지기 시작할 때만 진입
-    """
+# 3000불 미만일 때 무시할 메이저 키워드
+MAJORS_KEYWORDS = ['BTC', 'ETH', 'SOL', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'SUI', 'APT']
+
+def get_dynamic_watchlist(exchange, total_balance):
+    """±15% 이상 변동성 종목 추출 (폭등/폭락 모두 포함)"""
     try:
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
+        tickers = exchange.fetch_tickers()
+        volatile_candidates = []
+        
+        for symbol, t in tickers.items():
+            if 'USDT' in symbol and ":" not in symbol:
+                pct = t.get('percentage', 0)
+                low = t.get('low', 0)
+                last = t.get('last', 0)
+                # 24시간 등락률 또는 저점 대비 상승폭 중 큰 것 선택
+                low_to_last_pct = ((last - low) / low * 100) if low > 0 else 0
+                max_change = max(abs(pct), low_to_last_pct)
+                
+                if max_change >= 15:
+                    if total_balance < 3000:
+                        if any(m in symbol for m in MAJORS_KEYWORDS):
+                            continue
+                    volatile_candidates.append({'symbol': symbol, 'change': max_change})
+
+        return [m['symbol'] for m in sorted(volatile_candidates, key=lambda x: x['change'], reverse=True)[:15]]
+    except Exception as e:
+        print(f"⚠️ 리스트 생성 에러: {e}")
+        return []
+
+def check_v80_signal(exchange, symbol):
+    """사용자 원칙: 1~2봉 확인 후 3봉째 확정 진입"""
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=50)
         df = pd.DataFrame(ohlcv, columns=['ts', 'o', 'h', 'l', 'c', 'v'])
         df['c'] = df['c'].astype(float)
         
-        # 이평선 계산
         ma5 = df['c'].rolling(5).mean()
         ma20 = df['c'].rolling(20).mean()
         ma60 = df['c'].rolling(60).mean()
         
-        curr_ma5, prev_ma5 = ma5.iloc[-1], ma5.iloc[-2]
-        curr_ma20, prev_ma20 = ma20.iloc[-1], ma20.iloc[-2]
-        curr_ma60, prev_ma60 = ma60.iloc[-1], ma60.iloc[-2]
-
-        # 1. 롱(Long) 엄격 조건: 5 > 20 > 60 정배열 + 이격 확대
-        if curr_ma5 > curr_ma20 > curr_ma60:
-            # 이전 봉에서도 정배열이었는지 확인 (최소 3봉 이상 유지 확인용)
-            if ma5.iloc[-3] > ma20.iloc[-3] > ma60.iloc[-3]:
-                # 현재 선들 사이의 간격이 이전보다 벌어지고 있는지 확인 (추세 강화)
-                if (curr_ma5 - curr_ma20) > (prev_ma5 - prev_ma20):
-                    return "LONG"
+        # 3봉 연속 정렬 상태 및 이격 확대 확인
+        # 현재(idx: -1), 직전(-2), 그 전(-3)
+        is_long = (ma5.iloc[-1] > ma20.iloc[-1] > ma60.iloc[-1] and
+                   ma5.iloc[-2] > ma20.iloc[-2] > ma60.iloc[-2] and
+                   ma5.iloc[-3] > ma20.iloc[-3] > ma60.iloc[-3])
         
-        # 2. 숏(Short) 엄격 조건: 5 < 20 < 60 역배열 + 이격 확대
-        if curr_ma5 < curr_ma20 < curr_ma60:
-            if ma5.iloc[-3] < ma20.iloc[-3] < ma60.iloc[-3]:
-                if (curr_ma20 - curr_ma5) > (prev_ma20 - prev_ma5):
-                    return "SHORT"
-                    
+        is_short = (ma5.iloc[-1] < ma20.iloc[-1] < ma60.iloc[-1] and
+                    ma5.iloc[-2] < ma20.iloc[-2] < ma60.iloc[-2] and
+                    ma5.iloc[-3] < ma20.iloc[-3] < ma60.iloc[-3])
+
+        if is_long and (ma5.iloc[-1] - ma20.iloc[-1]) > (ma5.iloc[-2] - ma20.iloc[-2]):
+            return "LONG"
+        if is_short and (ma20.iloc[-1] - ma5.iloc[-1]) > (ma20.iloc[-2] - ma5.iloc[-2]):
+            return "SHORT"
         return "WAIT"
     except:
         return "RETRY"
 
-# ... (기존 get_dynamic_watchlist 및 execute_v80_trade 함수와 동일하게 유지)
+def execute_v80_trade(exchange, symbol, signal, max_slots):
+    """자산의 10% 진입, 1슬롯 원칙"""
+    try:
+        pos_info = exchange.fetch_positions()
+        active_positions = [p for p in pos_info if float(p.get('contracts', 0)) != 0]
+        if len(active_positions) >= max_slots: return
+
+        balance = exchange.fetch_balance()
+        total_usdt = balance['total']['USDT']
+        ticker = exchange.fetch_ticker(symbol)
+        price = float(ticker['last'])
+        
+        leverage = 5 # 5000불 미만 5배 고정
+        exchange.set_leverage(leverage, symbol)
+        
+        # 잔고의 10% 사용
+        entry_budget = (total_usdt * 0.1) * leverage
+        amount = exchange.amount_to_precision(symbol, entry_budget / price)
+        
+        side = 'buy' if signal == 'LONG' else 'sell'
+        exchange.create_market_order(symbol, side, amount)
+        print(f"🚀 [진입] {symbol} {signal} | 3봉 확정 타점 사냥 시작!")
+    except Exception as e:
+        print(f"❌ 매매 에러: {e}")
 
 if __name__ == "__main__":
     exchange = get_exchange()
     print("------------------------------------------")
-    print("🏰 V80 [3~5봉 엄격 확인] 모드 가동")
-    print("💡 크로스 후 추세 확정 시에만 진입합니다.")
+    print("🚀 V80 [3봉 초입 사냥] 전면 가동")
+    print("💡 ±15% 변동성 / 3봉 정렬 확인 / 수익 30% 격리")
     print("------------------------------------------")
     
-    # 메인 루프에서 check_v80_strict_signal을 호출하도록 설정
-    # (나머지 실행 로직은 동일)
+    while True:
+        try:
+            balance = exchange.fetch_balance()
+            total_balance = balance['total']['USDT']
+            watch_list = get_dynamic_watchlist(exchange, total_balance)
+            
+            # 2000불 미만 1슬롯 원칙
+            max_slots = 1 if total_balance < 3000 else 2
+            
+            for symbol in watch_list:
+                signal = check_v80_signal(exchange, symbol)
+                if signal in ["LONG", "SHORT"]:
+                    execute_v80_trade(exchange, symbol, signal, max_slots)
+                time.sleep(0.2)
+            
+            time.sleep(10)
+        except Exception as e:
+            print(f"⚠️ 메인 루프 에러: {e}")
+            time.sleep(10)
