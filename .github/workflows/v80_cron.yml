@@ -1,14 +1,31 @@
-name: V80_Auto_Monitor
+name: V80_Supreme_Unified_Bot
+
 on:
   schedule:
-    - cron: '0 * * * *'
-  workflow_dispatch:
+    - cron: '0 * * * *' # 매시간 정각 자동 실행
+  workflow_dispatch:      # 수동 실행 버튼 활성화
+
 jobs:
-  build:
+  trading:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-python@v4
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-      - run: python main.py
+
+      - name: Install Dependencies
+        run: pip install ccxt pandas numpy
+
+      - name: Run Integrated Engine
+        env:
+          # 사령관님이 만드신 Secrets 이름 그대로 배달
+          BITGET_API_KEY: ${{ secrets.BITGET_API_KEY }}
+          BITGET_SECRET_KEY: ${{ secrets.BITGET_SECRET_KEY }}
+          BITGET_PASSPHRASE: ${{ secrets.BITGET_PASSPHRASE }}
+          BINANCE_KEY: ${{ secrets.BINANCE_KEY }}
+          BINANCE_SECRET: ${{ secrets.BINANCE_SECRET }}
+        run: python bot.py
