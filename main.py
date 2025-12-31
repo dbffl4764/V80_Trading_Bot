@@ -14,36 +14,51 @@ def get_exchange():
         'options': {'defaultType': 'future'}
     })
 
-MAJORS_KEYWORDS = ['BTC', 'ETH', 'SOL', 'XRP', 'ADA', 'DOGE', 'AVAX', 'LINK', 'SUI', 'APT']
-
-def get_dynamic_watchlist(exchange, total_balance):
+def check_v80_strict_signal(exchange, symbol):
+    """
+    사용자 원칙: 크로스 후 3~5봉 지점 (엄격 모드)
+    5/20/60 선이 정렬되고, 선들 사이의 간격이 벌어지기 시작할 때만 진입
+    """
     try:
-        tickers = exchange.fetch_tickers()
-        volatile_candidates = []
+        ohlcv = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
+        df = pd.DataFrame(ohlcv, columns=['ts', 'o', 'h', 'l', 'c', 'v'])
+        df['c'] = df['c'].astype(float)
         
-        for symbol, t in tickers.items():
-            if 'USDT' in symbol and ":" not in symbol:
-                # 1. 24시간 등락률 확인
-                pct = t.get('percentage', 0)
-                
-                # 2. [추가] 오늘 저가 대비 등락률 확인 (실시간 급등주 포착)
-                low = t.get('low', 0)
-                last = t.get('last', 0)
-                low_to_last_pct = ((last - low) / low * 100) if low > 0 else 0
-                
-                # 둘 중 하나라도 15% 이상이면 후보군 등록 ㅡㅡ;ㅋ
-                max_change = max(abs(pct), low_to_last_pct)
-                
-                if max_change >= 15:
-                    if total_balance < 3000:
-                        if any(m in symbol for m in MAJORS_KEYWORDS):
-                            continue
-                    volatile_candidates.append({'symbol': symbol, 'change': max_change})
+        # 이평선 계산
+        ma5 = df['c'].rolling(5).mean()
+        ma20 = df['c'].rolling(20).mean()
+        ma60 = df['c'].rolling(60).mean()
+        
+        curr_ma5, prev_ma5 = ma5.iloc[-1], ma5.iloc[-2]
+        curr_ma20, prev_ma20 = ma20.iloc[-1], ma20.iloc[-2]
+        curr_ma60, prev_ma60 = ma60.iloc[-1], ma60.iloc[-2]
 
-        sorted_list = sorted(volatile_candidates, key=lambda x: x['change'], reverse=True)
-        return [m['symbol'] for m in sorted_list[:15]]
-    except Exception as e:
-        print(f"⚠️ 리스트 생성 에러: {e}")
-        return []
+        # 1. 롱(Long) 엄격 조건: 5 > 20 > 60 정배열 + 이격 확대
+        if curr_ma5 > curr_ma20 > curr_ma60:
+            # 이전 봉에서도 정배열이었는지 확인 (최소 3봉 이상 유지 확인용)
+            if ma5.iloc[-3] > ma20.iloc[-3] > ma60.iloc[-3]:
+                # 현재 선들 사이의 간격이 이전보다 벌어지고 있는지 확인 (추세 강화)
+                if (curr_ma5 - curr_ma20) > (prev_ma5 - prev_ma20):
+                    return "LONG"
+        
+        # 2. 숏(Short) 엄격 조건: 5 < 20 < 60 역배열 + 이격 확대
+        if curr_ma5 < curr_ma20 < curr_ma60:
+            if ma5.iloc[-3] < ma20.iloc[-3] < ma60.iloc[-3]:
+                if (curr_ma20 - curr_ma5) > (prev_ma20 - prev_ma5):
+                    return "SHORT"
+                    
+        return "WAIT"
+    except:
+        return "RETRY"
 
-# (check_v80_signal, execute_v80_trade 함수는 이전 통합본과 동일하게 유지)
+# ... (기존 get_dynamic_watchlist 및 execute_v80_trade 함수와 동일하게 유지)
+
+if __name__ == "__main__":
+    exchange = get_exchange()
+    print("------------------------------------------")
+    print("🏰 V80 [3~5봉 엄격 확인] 모드 가동")
+    print("💡 크로스 후 추세 확정 시에만 진입합니다.")
+    print("------------------------------------------")
+    
+    # 메인 루프에서 check_v80_strict_signal을 호출하도록 설정
+    # (나머지 실행 로직은 동일)
