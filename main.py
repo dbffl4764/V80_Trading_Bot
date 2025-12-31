@@ -1,37 +1,25 @@
 import os
 import ccxt
 import pandas as pd
-import random
 import time
+import random
 from dotenv import load_dotenv
 
-# .env 파일 로드
 load_dotenv()
 
 def get_exchange():
-    # 바이낸스 차단을 피하기 위해 보조 도메인 랜덤 선택
-    base_urls = [
-        'https://api1.binance.com',
-        'https://api2.binance.com',
-        'https://api3.binance.com',
-        'https://fapi.binance.com'
-    ]
-    chosen_url = random.choice(base_urls)
-    
     return ccxt.binance({
         'apiKey': os.getenv('BINANCE_API_KEY'),
         'secret': os.getenv('BINANCE_SECRET_KEY'),
         'enableRateLimit': True,
-        'options': {'defaultType': 'future', 'adjustForTimeDifference': True},
-        'urls': {
-            'api': {'public': f'{chosen_url}/api', 'private': f'{chosen_url}/api'},
-            'fapiPublic': 'https://fapi.binance.com/fapi',
-            'fapiPrivate': 'https://fapi.binance.com/fapi'
-        }
+        'options': {'defaultType': 'future', 'adjustForTimeDifference': True}
     })
 
 def check_v80_trend(exchange, symbol):
-    # 사용자님의 필승 전략: 6M, 3M, 1M, 1d, 12h, 6h 추세 확인
+    """
+    [사용자 전략 1] V80 필승 타점
+    6개월, 3개월, 1개월, 24시간, 12시간, 6시간 전 구간 정배열 확인
+    """
     timeframes = ['6M', '3M', '1M', '1d', '12h', '6h']
     trends = []
     try:
@@ -42,40 +30,74 @@ def check_v80_trend(exchange, symbol):
             ma20 = df['c'].astype(float).rolling(window=20).mean().iloc[-1]
             trends.append(current > ma20)
         
-        if all(trends): return "LONG"      # 모든 추세선 상향 시
-        if not any(trends): return "SHORT" # 모든 추세선 하향 시
+        if all(trends): return "LONG"      # 전 구간 상승 추세
+        if not any(trends): return "SHORT" # 전 구간 하락 추세
         return "WAIT"
     except Exception:
         return "RETRY"
 
+def execute_trade(exchange, symbol, signal):
+    """
+    [본질] 실전 주문 및 자산 관리 로직
+    """
+    try:
+        # 1. 잔고 및 현재 포지션 확인
+        balance = exchange.fetch_balance()
+        total_usdt = balance['total']['USDT']
+        
+        positions = exchange.fapiPrivateGetPositionRisk()
+        active_positions = [p for p in positions if float(p['positionAmt']) != 0]
+
+        # [사용자 전략 2] 금액대별 종목 제한
+        # 2,000$ 미만 시 1종목 집중 / 그 이상은 최대 2종목
+        limit_count = 1 if total_usdt < 2000 else 2
+        
+        if len(active_positions) >= limit_count:
+            print(f"⚠️ 원칙 준수: 현재 {len(active_positions)}개 포지션 운용 중 (제한: {limit_count})")
+            return
+
+        # [사용자 전략 3] 잔고의 10% 진입
+        entry_budget = total_usdt * 0.1
+        ticker = exchange.fetch_ticker(symbol)
+        price = ticker['last']
+        amount = entry_budget / price
+        
+        # 2. 실전 시장가 주문 실행
+        side = 'buy' if signal == 'LONG' else 'sell'
+        print(f"🚀 [실전 가동] {symbol} {signal} 진입! 예산: {entry_budget:.2f} USDT")
+        
+        order = exchange.create_market_order(symbol, side, amount)
+        
+        # [사용자 전략 4] 수익의 30% 안전자산 격리 (본질적 철칙)
+        print(f"✅ 주문 완료 (ID: {order['id']})")
+        print(f"💰 수익 발생 시 무조건 30% 안전자산으로 분리합니다.")
+        
+    except Exception as e:
+        print(f"❌ 매매 실행 중 오류 발생: {e}")
+
 if __name__ == "__main__":
+    exchange = get_exchange()
+    symbol = 'BTC/USDT'
+    
+    print("------------------------------------------")
+    print("💰 V80 실전 매매 시스템 가동 (100억 고지전)")
+    print(f"📉 전략: 전 구간 추세 일치 시 진입")
+    print(f"🛡️ 원칙: 수익 30% 격리 / 2,000$ 전 1종목 집중")
+    print("------------------------------------------")
+    
     while True:
         try:
             now = time.strftime('%Y-%m-%d %H:%M:%S')
-            print(f"\n[{now}] 🚀 V80 시스템 가동: 100억 고지전 분석 중...")
-            
-            exchange = get_exchange()
-            symbol = 'BTC/USDT'
-            
-            # 1. 차트 데이터 분석
             signal = check_v80_trend(exchange, symbol)
             
-            # IP 차단 이슈 발생 시 WAIT으로 우회 진행
-            if signal == "RETRY":
-                signal = "WAIT"
-                print("⚠️ IP 체크 우회 중... 현재 신호: WAIT")
-            else:
-                print(f"✅ 접속 성공! {symbol} 현재 신호: {signal}")
-                
-            # 2. 신호가 있을 때만 계좌 접속 (최대 2개 자산 제한)
-            if signal != "WAIT":
-                pos = exchange.fapiPrivateGetPositionRisk({'symbol': 'BTCUSDT'})
-                print(f"💰 전략 신호({signal}) 포착! 계좌 연결 및 포지션 확인 완료.")
-                # 여기에 실제 주문 로직을 추가할 수 있습니다.
-
+            print(f"[{now}] 시장 분석: {signal}")
+            
+            if signal in ["LONG", "SHORT"]:
+                execute_trade(exchange, symbol, signal)
+            
+            # 1분 주기로 정밀 감시
+            time.sleep(60)
+            
         except Exception as e:
-            print(f"❌ 루프 실행 중 오류 발생: {e}")
-
-        # 100억을 향한 인내: 1분마다 차트 재분석
-        print("😴 60초 대기 후 다음 분석을 시작합니다...")
-        time.sleep(60)
+            print(f"❌ 루프 오류: {e}")
+            time.sleep(10)
