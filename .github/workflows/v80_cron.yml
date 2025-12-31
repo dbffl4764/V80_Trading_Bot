@@ -1,0 +1,28 @@
+name: V80_Auto_Monitor
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # 매 시간 정각마다 자동으로 실행
+  workflow_dispatch:      # 수동으로도 실행 가능하게 설정
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install ccxt pandas python-dotenv
+
+      - name: Run V80 System
+        env:
+          BINANCE_API_KEY: ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_SECRET_KEY: ${{ secrets.BINANCE_SECRET_KEY }}
+        run: python main.py
