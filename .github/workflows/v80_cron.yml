@@ -1,4 +1,4 @@
-name: V80_Unified_Bot
+name: V80_Supreme_Unified_Bot
 
 on:
   schedule:
@@ -9,18 +9,18 @@ jobs:
   trading:
     runs-on: ubuntu-latest
     steps:
-      - name: 1. Checkout
+      - name: Checkout
         uses: actions/checkout@v3
 
-      - name: 2. Python Setup
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
 
-      - name: 3. Install Tools
+      - name: Install
         run: pip install ccxt pandas numpy
 
-      - name: 4. Run Bot
+      - name: Run
         env:
           BITGET_API_KEY: ${{ secrets.BITGET_API_KEY }}
           BITGET_SECRET_KEY: ${{ secrets.BITGET_SECRET_KEY }}
