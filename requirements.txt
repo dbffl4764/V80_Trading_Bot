@@ -1,3 +1,6 @@
+cat << 'EOF' > requirements.txt
 ccxt
 pandas
-python-dotenv
+numpy
+EOF
+pip3 install -r requirements.txt
