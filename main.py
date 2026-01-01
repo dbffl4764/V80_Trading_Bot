@@ -25,7 +25,7 @@ class V80_Infinite_Striker:
             balance = self.ex.fetch_balance()
             positions = balance['info']['positions']
             for p in positions:
-                if float(p['positionAmt']) != 0:
+                if float(p.get('positionAmt', 0)) != 0:
                     return p['symbol'].replace('USDT', '/USDT:USDT'), float(p['positionAmt'])
             return None, 0
         except: return None, 0
@@ -33,49 +33,48 @@ class V80_Infinite_Striker:
     def check_v80_signal(self, symbol):
         try:
             ohlcv = self.ex.fetch_ohlcv(symbol, timeframe='15m', limit=60)
+            if not ohlcv or len(ohlcv) < 60: return None, 0
+            
             df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
             ma5 = df['c'].rolling(5).mean().iloc[-1]
             ma20 = df['c'].rolling(20).mean().iloc[-1]
             ma60 = df['c'].rolling(60).mean().iloc[-1]
             curr = df['c'].iloc[-1]
             
-            # 20-60 이격 (사령관님 명령: 아주 촘촘하게 1.5%)
+            # 사령관님 명령: 20-60 이격 1.5% 이내 (초촘촘)
             ma_gap = abs(ma20 - ma60) / ma60 * 100
             curr_gap = abs(curr - ma20) / ma20 * 100
 
-            if ma_gap <= 1.5: 
-                if curr_gap <= 2.5:
-                    if ma5 > ma20 > ma60 and curr > ma20:
-                        return "LONG", curr
-                    elif ma5 < ma20 < ma60 and curr < ma20:
-                        return "SHORT", curr
+            if ma_gap <= 1.5 and curr_gap <= 2.5:
+                # 서열 확인
+                if ma5 > ma20 > ma60 and curr > ma20:
+                    return "LONG", curr
+                elif ma5 < ma20 < ma60 and curr < ma20:
+                    return "SHORT", curr
             return None, curr
         except: return None, 0
 
     def execute_mission(self, symbol, side, entry_price):
         try:
-            # 1. 진입
             bal = self.ex.fetch_balance()['free'].get('USDT', 0)
             firepower = (bal * 0.4) / 3 
             amount = float(self.ex.amount_to_precision(symbol, (firepower * self.leverage) / entry_price))
             
-            order = self.ex.create_market_order(symbol, 'buy' if side == "LONG" else 'sell', amount)
-            self.log(f"🎯 [진격] {symbol} {side} 사격!")
+            self.ex.create_market_order(symbol, 'buy' if side == "LONG" else 'sell', amount)
+            self.log(f"🎯 [진격] {symbol} {side} 사격 성공!")
 
-            # 2. [퍼센트 기반 방패] 진입가 기준 -3.5% 지점 (ROE -35%)
-            # 가격 계산 후 바이낸스 정밀도에 맞춰 바로 전송
-            stop_price = self.ex.price_to_precision(symbol, entry_price * 0.965 if side == "LONG" else entry_price * 1.035)
-            
-            # 3. 방패 예약 (실패 시 무한 재시도)
+            # 방패 설정 (ROE -35%)
+            stop_price = float(self.ex.price_to_precision(symbol, entry_price * 0.965 if side == "LONG" else entry_price * 1.035))
             params = {'stopPrice': stop_price, 'reduceOnly': True, 'workingType': 'MARK_PRICE'}
-            while True:
+            
+            # 방패 장착 성공할 때까지 반복
+            for i in range(5):
                 try:
                     self.ex.create_order(symbol, 'STOP_MARKET', 'sell' if side == "LONG" else 'buy', amount, None, params)
-                    self.log(f"🛡️ [방패] ROE -35% 지점 예약 완료 ({stop_price})")
+                    self.log(f"🛡️ [방패] 스탑로스 완료: {stop_price}")
                     break
-                except Exception as e:
-                    self.log(f"🚨 방패 예약 재시도 중... {e}")
-                    time.sleep(1)
+                except:
+                    time.sleep(2)
 
             step = 1
             while True:
@@ -84,10 +83,9 @@ class V80_Infinite_Striker:
                 roe = ((curr_p - entry_price) / entry_price * 100 * self.leverage) if side == "LONG" else ((entry_price - curr_p) / entry_price * 100 * self.leverage)
 
                 if roe <= -35.0:
-                    self.log(f"🚨 [손절] 1차분 삭제!")
+                    self.log(f"🚨 [손절] 1차분 종료.")
                     break 
 
-                # 불타기
                 if step == 1 and roe >= 150.0:
                     self.ex.create_market_order(symbol, 'buy' if side == "LONG" else 'sell', amount)
                     self.log(f"🔥 [불타기] 150% 돌파!")
@@ -99,12 +97,12 @@ class V80_Infinite_Striker:
 
                 s, amt = self.get_active_symbol()
                 if not s: break
-                time.sleep(10)
+                time.sleep(15)
         except Exception as e:
-            self.log(f"⚠️ 작전 오류: {e}")
+            self.log(f"⚠️ 미션 중 에러: {e}")
 
     def run(self):
-        self.log(f"⚔️ V80 최종 스트라이커 발진! (20-60 촘촘 필터 장착)")
+        self.log(f"⚔️ V80 무결점 엔진 가동! (1.5% 촘촘 필터)")
         while True:
             try:
                 symbol, amt = self.get_active_symbol()
@@ -112,8 +110,9 @@ class V80_Infinite_Striker:
                     tickers = self.ex.fetch_tickers()
                     candidates = []
                     for s, t in tickers.items():
-                        if s.endswith('/USDT:USDT'):
-                            if abs(t.get('percentage', 0)) >= 5.0:
+                        # 데이터가 없는 경우(None)를 철저히 배제
+                        if s.endswith('/USDT:USDT') and t.get('percentage') is not None:
+                            if abs(t['percentage']) >= 5.0:
                                 candidates.append({'s': s, 'v': t.get('quoteVolume', 0)})
                     
                     for cand in sorted(candidates, key=lambda x: x['v'], reverse=True)[:10]:
@@ -123,7 +122,7 @@ class V80_Infinite_Striker:
                             break
                 time.sleep(15)
             except Exception as e:
-                self.log(f"⚠️ 에러: {e}")
+                self.log(f"⚠️ 메인 루프 에러 방어: {e}")
                 time.sleep(10)
 
 if __name__ == "__main__":
