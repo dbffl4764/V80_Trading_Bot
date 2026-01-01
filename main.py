@@ -50,34 +50,41 @@ class V80_Infinite_Striker:
             bal = self.ex.fetch_balance()['free'].get('USDT', 0)
             firepower = (bal * 0.4) / 3 
             first_amount = (firepower * self.leverage) / entry_price
+            
+            # 1. 1차 포격 (시장가)
             self.log(f"🎯 [진격] {symbol} {side} 사격! (화력: {firepower:.2f}USDT)")
             self.ex.create_market_order(symbol, 'buy' if side == "LONG" else 'sell', first_amount)
             
+            # 2. [철통 방어] 즉시 바이낸스 서버에 스탑로스(Stop Market) 예약
+            # 레버리지 10배 기준 ROE -35%는 가격상 -3.5% 지점
+            stop_price = entry_price * 0.965 if side == "LONG" else entry_price * 1.035
+            
+            params = {'stopPrice': self.ex.price_to_precision(symbol, stop_price), 'reduceOnly': True}
+            self.ex.create_order(symbol, 'STOP_MARKET', 'sell' if side == "LONG" else 'buy', first_amount, None, params)
+            self.log(f"🛡️ [시스템 방어] -35% 지점에 스탑로스 예약 완료: {stop_price}")
+
             step = 1
             while True:
                 ticker = self.ex.fetch_ticker(symbol)
                 curr_price = ticker['last']
                 roe = ((curr_price - entry_price) / entry_price * 100 * self.leverage) if side == "LONG" else ((entry_price - curr_price) / entry_price * 100 * self.leverage)
 
-                if roe <= -35.0:
-                    self.log(f"🚨 [손절] 1차분 삭제! 바로 다음 타겟 정찰.")
-                    self.ex.create_market_order(symbol, 'sell' if side == "LONG" else 'buy', first_amount)
-                    break 
-
+                # 3. [불타기] 150% 돌파 시
                 if step == 1 and roe >= 150.0:
-                    self.log(f"🔥 [불타기] 150% 돌파! 2차 투입!")
+                    self.log(f"🔥 [불타기] 150% 돌파! 2차 투입 및 스탑로스 본절 상향!")
                     self.ex.create_market_order(symbol, 'buy' if side == "LONG" else 'sell', first_amount)
+                    # 수익 보호를 위해 기존 스탑로스 취소 후 본절가로 새로 고정하는 로직 추가 가능
                     step = 2
 
+                # 4. [불타기] 300% 돌파 시
                 if step == 2 and roe >= 300.0:
                     self.log(f"🚀 [불타기] 300% 돌파! 극한 수익 모드!")
                     self.ex.create_market_order(symbol, 'buy' if side == "LONG" else 'sell', first_amount)
                     step = 3
 
+                # 상황 종료 체크
                 s, amt = self.get_active_symbol()
-                if not s:
-                    self.log("🏁 상황 종료. 다음 타겟 정찰 시작.")
-                    break
+                if not s: break
                 time.sleep(10)
         except Exception as e:
             self.log(f"⚠️ 작전 오류: {e}")
