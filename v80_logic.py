@@ -1,14 +1,18 @@
+cat << 'EOF' > v80_logic.py
 import pandas as pd
 
-def check_trend(exchange, symbol):
-    timeframes = ['6M', '3M', '1M', '1d', '12h', '6h']
-    trends = []
-    for tf in timeframes:
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=tf, limit=30)
-        df = pd.DataFrame(ohlcv, columns=['ts', 'o', 'h', 'l', 'c', 'v'])
-        ma20 = df['c'].rolling(window=20).mean().iloc[-1]
-        trends.append(df['c'].iloc[-1] > ma20)
+def check_logic(df_d, df_m):
+    # 일봉(1D) 60-20 이격도 계산
+    ma60 = df_d['c'].rolling(60).mean().iloc[-1]
+    ma20 = df_d['c'].rolling(20).mean().iloc[-1]
+    curr = df_d['c'].iloc[-1]
+    disparity = abs(ma20 - ma60) / ma60 * 100
     
-    if all(trends): return "LONG"
-    if not any(trends): return "SHORT"
-    return "WAIT"
+    # 5분봉(5M) 단기 정렬 확인
+    m_ma20 = df_m['c'].rolling(20).mean().iloc[-1]
+    
+    if disparity >= 3.0: # 이격도 3% 이상
+        if curr > ma20 and curr > m_ma20: return "LONG"
+        if curr < ma20 and curr < m_ma20: return "SHORT"
+    return None
+EOF
