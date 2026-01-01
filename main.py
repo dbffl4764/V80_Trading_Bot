@@ -1,7 +1,7 @@
-# 1. 기존 프로세스 완전 종료
+# 1. 꼬여있는 프로세스 전부 정리
 sudo pkill -9 -f python3
 
-# 2. main.py 파일을 깨끗한 코드로 강제 덮어쓰기 (들여쓰기 완벽 교정)
+# 2. main.py 파일을 완벽한 파이썬 코드로 강제 재생성 (명령어 섞임 방지)
 cat << 'EOF' > main.py
 import ccxt, time, os, pandas as pd
 from datetime import datetime
@@ -100,8 +100,6 @@ if __name__ == "__main__":
     V80_IronClad_Striker().run()
 EOF
 
-# 3. 백그라운드 실행
+# 3. 백그라운드 실행 및 로그 확인
 nohup python3 -u main.py > binance.out 2>&1 &
-
-# 4. 로그 확인
 tail -f binance.out
