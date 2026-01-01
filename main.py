@@ -21,6 +21,7 @@ class AISniper:
         self.log("🚀 사령관님! 60-20 이격도 레이더 가동 중! (GCP 복구완료) ㅋ")
         try:
             tickers = self.ex.fetch_tickers()
+            # 5% 변동성 컷 (사령관님 철칙 ㅋ)
             targets = [s for s, t in tickers.items() if s.endswith('/USDT') and abs(t.get('percentage', 0)) >= 5.0]
             
             for s in targets[:10]:
@@ -31,10 +32,11 @@ class AISniper:
                 curr = df['c'].iloc[-1]
 
                 disparity = abs(ma20 - ma60) / ma60 * 100
-                if disparity >= 3.0: 
+                if disparity >= 3.0: # 이격도 3% 이상 포착 ㅋ
                     self.log(f"🔥 {s} 포착! 이격도: {disparity:.2f}% | 2분할 대기 중 ㅋ")
+                
         except Exception as e:
-            self.log(f"⚠️ 정찰 지연: {e}")
+            self.log(f"⚠️ 정찰 중 지연: {e}")
 
 if __name__ == "__main__":
     bot = AISniper()
@@ -43,6 +45,6 @@ if __name__ == "__main__":
         time.sleep(10)
 EOF
 
-# 꼬인 프로세스 죽이고, 방금 만든 파일 강제 실행! ㅋ
+# 꼬인 놈들 다 죽이고 강제 기동! ㅋ
 pkill -9 -f python3
 nohup python3 -u main.py > binance.out 2>&1 & tail -f binance.out
