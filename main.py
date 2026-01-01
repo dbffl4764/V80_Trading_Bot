@@ -2,7 +2,7 @@ import ccxt, time, os, pandas as pd, numpy as np
 from datetime import datetime
 from dotenv import load_dotenv
 
-# 구글 클라우드 환경변수 로드
+# 구글 클라우드 환경변수 자동 로드
 load_dotenv()
 
 class V80_Elite_Full_Force:
@@ -16,18 +16,13 @@ class V80_Elite_Full_Force:
         # [지침] 3000불 미만 시 레버리지 5배 고정 (방어력 우선)
         self.leverage = 5 
         self.log_file = "trading_history.csv"
-        self.safe_asset_ratio = 0.3  # 수익 시 30% 안전자산 회수
 
     def log(self, msg):
         now = datetime.now().strftime('%H:%M:%S')
         print(f"[{now}] 🧬 {msg}", flush=True)
 
-    def get_bal(self):
-        try: return float(self.ex.fetch_balance()['total']['USDT'])
-        except: return 0
-
     def learn_logic(self):
-        """[AI 학습] 과거 데이터를 분석하여 이격 필터를 스스로 강화"""
+        """[AI 학습] 실패한 이격도를 분석하여 필터를 스스로 강화"""
         try:
             if os.path.exists(self.log_file):
                 df = pd.read_csv(self.log_file)
@@ -35,7 +30,7 @@ class V80_Elite_Full_Force:
                     loss_df = df[df['result'] == 'Loss']
                     if not loss_df.empty:
                         return round(loss_df['ma_gap'].mean() * 0.85, 2)
-            return 3.5 # 기본 혈통 이격
+            return 3.5 # 사령관님 혈통 기본 이격
         except: return 3.5
 
     def check_v80_signal(self, symbol):
@@ -57,32 +52,28 @@ class V80_Elite_Full_Force:
             ma_gap = abs(c_ma20 - c_ma60) / c_ma60 * 100
             ma5_gap = abs(c_ma5 - c_ma20) / c_ma20 * 100
 
-            # 5% 이상 변동성 + 응축(ma_gap) + 수렴(ma5_gap)
+            # 5% 변동성 임계치 + 혈통 필터
             if 1.0 <= ma_gap <= dynamic_gap and ma5_gap <= 2.5:
-                # 정배열 태동
+                # 정배열 태동 (롱)
                 if (p_ma5 <= p_ma20) and (c_ma5 > c_ma20 > c_ma60):
                     return "LONG", curr, ma_gap
-                # 역배열 태동
+                # 역배열 태동 (숏)
                 elif (p_ma5 >= p_ma20) and (c_ma60 > c_ma20 > c_ma5):
                     return "SHORT", curr, ma_gap
             return None, curr, 0
         except: return None, 0, 0
 
     def run(self):
-        self.log("⚔️ V80 ELITE ALL-IN-ONE 엔진 가동! (사령관님 모든 지침 통합)")
+        self.log("⚔️ V80 ELITE ALL-IN-ONE 가동 (13불 부활 작전)")
         while True:
             try:
-                bal = self.get_bal()
+                bal = float(self.ex.fetch_balance()['total']['USDT'])
                 if bal < 5: break
 
-                # [지침] 자산 규모별 종목 수 조절
-                if bal < 2000: max_pos = 1
-                elif bal < 3000: max_pos = 2
-                elif bal < 5000: max_pos = 3
-                else: max_pos = 5
+                # [지침] 자산 규모별 종목 수 조절 (13불은 1종목 집중)
+                max_pos = 1 if bal < 3000 else (2 if bal < 5000 else 5)
 
                 tickers = self.ex.fetch_tickers()
-                # 거래량 상위 15개 중 5% 이상 주도주만 선별
                 targets = [s for s, t in tickers.items() if s.endswith('/USDT:USDT') and 'BTC' not in s 
                            and t.get('quoteVolume', 0) >= 100000000 and abs(t.get('percentage', 0)) >= 5.0]
 
@@ -90,18 +81,16 @@ class V80_Elite_Full_Force:
                     side, price, gap = self.check_v80_signal(s)
                     if side:
                         self.ex.set_leverage(self.leverage, s)
-                        # 시드 배분: 화력 45% 투입
-                        qty = float(self.ex.amount_to_precision(s, (bal * 0.45 * self.leverage) / price))
+                        qty = float(self.ex.amount_to_precision(s, (bal * 0.95 * self.leverage) / price))
                         
-                        # [지침] 1.75% 칼손절 예약 (레버리지 5배 시 원금 대비 약 -8.75% 방어)
+                        # [지침] 1.75% 즉시 손절 예약
                         sl_p = float(self.ex.price_to_precision(s, price * 0.9825 if side == "LONG" else price * 1.0175))
                         
                         self.ex.create_market_order(s, 'buy' if side == "LONG" else 'sell', qty)
                         self.ex.create_order(s, 'STOP_MARKET', 'sell' if side == "LONG" else 'buy', qty, None, {'stopPrice': sl_p, 'reduceOnly': True})
                         self.log(f"🎯 [사격] {s} {side} 진입 (이격: {gap:.2f}%)")
                         
-                        # 한 번 쏘면 10분간 상황 관망 및 휴식
-                        time.sleep(600)
+                        time.sleep(600) # 10분 관망
                         break
                 time.sleep(20)
             except Exception as e:
