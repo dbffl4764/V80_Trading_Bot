@@ -1,13 +1,17 @@
-import ccxt, time, os, pandas as pd
+import ccxt
+import time
+import os
+import pandas as pd
+import numpy as np
 from datetime import datetime
 from dotenv import load_dotenv
 
-# GCP 환경에서 API KEY 보안을 위해 .env 로드
+# 환경 변수 로드 (API KEY 보호)
 load_dotenv()
 
-class CommanderStrategyV80:
+class V80_Final_War:
     def __init__(self):
-        # 바이낸스 선물 거래소 연결
+        # 1. 바이낸스 선물 연결
         self.ex = ccxt.binance({
             'apiKey': os.getenv('BINANCE_API_KEY'),
             'secret': os.getenv('BINANCE_SECRET_KEY'),
@@ -15,128 +19,126 @@ class CommanderStrategyV80:
             'enableRateLimit': True
         })
         self.leverage = 20
-        self.loss_count = 0  # 연속 패배 카운트용 (3회 패배 시 중단)
-        self.safety_threshold = 2000.0  # 2,000불 전까지는 무조건 재투자
+        self.loss_count = 0 
+        self.safety_limit = 2000.0  # 2000불 미만 2분할 사격 지침
+        self.target_profit_roe = 100.0 # 100% ROE 반익절
 
     def log(self, msg):
-        # GCP 서버 터미널 실시간 확인을 위해 flush=True 필수
         print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] 🛡️ {msg}", flush=True)
 
+    def get_market_data(self, symbol, timeframe='5m', limit=100):
+        """OHLCV 데이터 수집 및 이평선 계산"""
+        try:
+            ohlcv = self.ex.fetch_ohlcv(symbol, timeframe, limit=limit)
+            df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+            df['ma5'] = df['c'].rolling(5).mean()
+            df['ma20'] = df['c'].rolling(20).mean()
+            df['ma60'] = df['c'].rolling(60).mean()
+            return df
+        except:
+            return None
+
     def run(self):
-        self.log("🚀 [40불 최후 작전] 구글 서버 엔진 가동 (목표: 2,000불)")
+        self.log("🚀 [사령관님 5년 연구 결집] 47불 부활 작전 엔진 가동!")
+        
         while True:
             try:
-                # [지침 1] 연속 3번 패하면 그날은 중단
+                # [지침 7] 하루 3번 손절 시 당일 셧다운
                 if self.loss_count >= 3:
-                    self.log("❌ 연속 3회 패배 발생! 사령관님 지침에 따라 금일 작전을 종료합니다.")
-                    break
+                    self.log("❌ [경고] 금일 3패 달성. 사령관님 지침에 따라 작전을 종료합니다."); break
 
                 # 잔고 확인
                 bal_info = self.ex.fetch_balance()
-                bal = float(bal_info['total']['USDT'])
-                if bal < 5: 
-                    self.log("총알 부족으로 가동 중단.")
-                    break
-                
-                # [지침 2] 2,000불 미만일 때는 안전자산 이체 없음 (전액 재투자)
-                if bal < self.safety_threshold:
-                    self.log(f"📊 현재 잔고 {bal:.2f} USDT. (공격적 복리 운용 모드)")
+                usdt_balance = float(bal_info['total']['USDT'])
+                if usdt_balance < 10:
+                    self.log("⚠️ 시드 고갈. 작전 불가능."); break
 
-                # [지침 3] 10% 변동성 알트만 타겟 (비트코인 제외)
-                ts = self.ex.fetch_tickers()
-                targets = []
-                for s, t in ts.items():
-                    pct = t.get('percentage')
-                    if s.endswith('/USDT:USDT') and pct is not None:
-                        if abs(pct) >= 10.0 and 'BTC' not in s:
-                            targets.append(s)
-                
-                # 거래량 상위 10개 종목 추출
-                targets = sorted(targets, key=lambda x: ts[x].get('quoteVolume', 0), reverse=True)[:10]
+                # [지침 2, 3] 종목 선정 (비트 제외, 변동성 10% 이상, 거래량 상위 10개)
+                tickers = self.ex.fetch_tickers()
+                targets = [
+                    s for s, t in tickers.items() 
+                    if s.endswith('/USDT:USDT') and 'BTC' not in s and abs(t.get('percentage', 0)) >= 10.0
+                ]
+                targets = sorted(targets, key=lambda x: tickers[x].get('quoteVolume', 0), reverse=True)[:10]
 
-                for s in targets:
-                    # 5분봉 데이터 65개 (60선 계산용)
-                    o = self.ex.fetch_ohlcv(s, '5m', limit=65)
-                    df = pd.DataFrame(o, columns=['t','o','h','l','c','v'])
-                    c = df['c']
-                    m5, m20, m60 = c.rolling(5).mean().iloc[-1], c.rolling(20).mean().iloc[-1], c.rolling(60).mean().iloc[-1]
-                    curr = c.iloc[-1]
+                for symbol in targets:
+                    df = self.get_market_data(symbol)
+                    if df is None or len(df) < 60: continue
+
+                    curr_price = df['c'].iloc[-1]
+                    m5, m20, m60 = df['ma5'].iloc[-1], df['ma20'].iloc[-1], df['ma60'].iloc[-1]
                     
-                    # [지침 4] 이격도 1.0% ~ 7.0% (사령관님 최적화 값)
-                    gap = abs(m20 - m60) / m60 * 100
-                    if 1.0 <= gap <= 7.0:
-                        # 롱/숏 판정 로직
-                        side = 'buy' if (m5 > m20 > m60 and curr > m5) else ('sell' if (m60 > m20 > m5 and curr < m5) else None)
+                    # [사령관님 핵심 로직 1] 60-20-5 이평선 정렬 확인
+                    # [사령관님 핵심 로직 2] 60-20 이격도 (1~7%) 수렴 확인
+                    gap_60_20 = abs(m60 - m20) / m60 * 100
+                    
+                    side = None
+                    if (m5 > m20 > m60) and (1.0 <= gap_60_20 <= 7.0) and (curr_price > m5):
+                        side = 'buy'
+                    elif (m60 > m20 > m5) and (1.0 <= gap_60_20 <= 7.0) and (curr_price < m5):
+                        side = 'sell'
+
+                    if side:
+                        # 레버리지 설정
+                        self.ex.set_leverage(self.leverage, symbol)
                         
-                        if side:
-                            self.ex.set_leverage(self.leverage, s)
-                            total_fire = bal * 0.95 # 잔고의 95% 할당
-                            sl_p = curr * (1 - 0.0175) if side == 'buy' else curr * (1 + 0.0175) # ROE -35% 지점
+                        # [지침 5] 2000불 미만 2분할 사격
+                        max_division = 2 if usdt_balance < self.safety_limit else 3
+                        # 한 발당 수량 (수수료 대비 0.9 곱함)
+                        qty = float(self.ex.amount_to_precision(symbol, (usdt_balance * 0.9 * self.leverage / max_division) / curr_price))
+                        
+                        # [지침 6] 진입과 동시에 1.75% 스탑로스 설정
+                        sl_price = float(self.ex.price_to_precision(symbol, curr_price * (1 - 0.0175) if side == 'buy' else curr_price * (1 + 0.0175)))
+
+                        # 1차 진입
+                        self.log(f"🎯 {symbol} {side} 1차 사격! 이격도: {gap_60_20:.2f}%")
+                        self.ex.create_market_order(symbol, side, qty)
+                        
+                        # 즉시 스탑로스 주문 (서버에 직접 박음)
+                        self.ex.create_order(symbol, 'STOP_MARKET', 'sell' if side == 'buy' else 'buy', qty * max_division, None, {
+                            'stopPrice': sl_price, 'reduceOnly': True
+                        })
+
+                        # [지침] 수익 중일 때만 2차 후속탄 (불타기)
+                        time.sleep(10)
+                        current_ticker = self.ex.fetch_ticker(symbol)
+                        if (side == 'buy' and current_ticker['last'] > curr_price) or (side == 'sell' and current_ticker['last'] < curr_price):
+                            self.ex.create_market_order(symbol, side, qty)
+                            self.log(f"📦 {symbol} 2차 후속탄 투입 완료.")
+
+                        # 익절 관리 루프
+                        highest_price, half_sold = current_ticker['last'], False
+                        while True:
+                            time.sleep(10)
+                            pos_info = [p for p in self.ex.fetch_balance()['info']['positions'] if p['symbol'] == symbol.replace('/', '').replace(':USDT', '')]
+                            amt = abs(float(pos_info[0]['positionAmt'])) if pos_info else 0
                             
-                            # --- [지침 5] 1차 사격 (3분할 중 1단계) ---
-                            amt1 = float(self.ex.amount_to_precision(s, (total_fire / 3 * self.leverage) / curr))
-                            self.ex.create_market_order(s, side, amt1)
-                            self.log(f"🎯 {s} 1차 {side} 진입 (이격: {gap:.2f}%)")
+                            if amt == 0: # 손절 혹은 익절 완료됨
+                                self.ex.cancel_all_orders(symbol)
+                                if not half_sold: self.loss_count += 1
+                                break
+                            
+                            p_now = self.ex.fetch_ticker(symbol)['last']
+                            roe = ((p_now - curr_price) / curr_price * 100 * self.leverage) if side == 'buy' else ((curr_price - p_now) / curr_price * 100 * self.leverage)
+                            highest_price = max(highest_price, p_now) if side == 'buy' else min(highest_price, p_now)
 
-                            failed = False
-                            # --- [지침 6] 노 물타기 3분할 (방향 맞을 때만 후속탄) ---
-                            for i in range(2, 4):
-                                time.sleep(2) # 2초 간격 체크
-                                now_p = self.ex.fetch_ticker(s)['last']
-                                
-                                # 1차 사격 후 즉시 손절가 터치 시 중단
-                                if (side == 'buy' and now_p <= sl_p) or (side == 'sell' and now_p >= sl_p):
-                                    self.ex.create_market_order(s, 'sell' if side == 'buy' else 'buy', amt1, {'reduceOnly': True})
-                                    self.log("🧨 방향 틀림! 1차 손절 후 작전 즉시 중단.")
-                                    self.loss_count += 1
-                                    failed = True
-                                    break
-                                
-                                # 방향 맞으면 2차, 3차 투입
-                                amt_next = float(self.ex.amount_to_precision(s, (total_fire / 3 * self.leverage) / now_p))
-                                self.ex.create_market_order(s, side, amt_next)
-                                self.log(f"📦 {i}차 후속 사격 완료.")
+                            # [지침 9] 100% ROE 달성 시 50% 익절
+                            if not half_sold and roe >= self.target_profit_roe:
+                                self.ex.create_market_order(symbol, 'sell' if side == 'buy' else 'buy', amt / 2, {'reduceOnly': True})
+                                half_sold = True
+                                self.loss_count = 0 # 패배 카운트 리셋
+                                self.log(f"💰 {symbol} 100% ROE 달성! 50% 익절 완료.")
 
-                            if failed: break 
-
-                            # --- [지침 7] 익절 감시 (100% 반익절 + 1% 트레일링) ---
-                            high_p, half_taken = now_p, False
-                            while True:
-                                time.sleep(3)
-                                ticker = self.ex.fetch_ticker(s); now_p = ticker['last']
-                                pos = [p for p in self.ex.fetch_balance()['info']['positions'] if p['symbol'].replace('USDT', '/USDT:USDT') == s]
-                                c_amt = abs(float(pos[0]['positionAmt'])) if pos else 0
-                                if c_amt == 0: break # 포지션 종료 시 루프 탈출
-                                
-                                roe = ((now_p - curr) / curr * 100 * self.leverage) if side == 'buy' else ((curr - now_p) / curr * 100 * self.leverage)
-                                high_p = max(high_p, now_p) if side == 'buy' else min(high_p, now_p)
-
-                                # 100% 수익 시 절반 익절
-                                if not half_taken and roe >= 100:
-                                    self.ex.create_market_order(s, 'sell' if side == 'buy' else 'buy', c_amt / 2, {'reduceOnly': True})
-                                    half_taken = True
-                                    self.loss_count = 0 # 수익 나면 패배 카운트 리셋
-                                    self.log("💰 100% 수익 달성! 절반 익절 및 패배 카운트 초기화.")
-
-                                # 반익절 후 고점 대비 1% 하락 시 전량 익절 (트레일링)
-                                if half_taken:
-                                    drop = (high_p - now_p) / high_p * 100 if side == 'buy' else (now_p - high_p) / high_p * 100
-                                    if drop >= 1.0:
-                                        self.ex.create_market_order(s, 'sell' if side == 'buy' else 'buy', c_amt, {'reduceOnly': True})
-                                        self.log("🏁 트레일링 스탑 발동. 전량 익절 완료.")
-                                        break
-                                
-                                # 최종 손절 라인 감시
-                                if (side == 'buy' and now_p <= sl_p) or (side == 'sell' and now_p >= sl_p):
-                                    self.ex.create_market_order(s, 'sell' if side == 'buy' else 'buy', c_amt, {'reduceOnly': True})
-                                    if not half_taken: self.loss_count += 1
-                                    self.log("🚩 최종 손절 완료.")
-                                    break
-                            break # 거래 완료 후 대기
-                time.sleep(15)
+                            # [지침 10] 트레일링 스탑 (최고가 대비 1% 하락 시 전량 매도)
+                            if half_sold:
+                                pull_back = (highest_price - p_now) / highest_price * 100 if side == 'buy' else (p_now - highest_price) / highest_price * 100
+                                if pull_back >= 1.0:
+                                    self.ex.create_market_order(symbol, 'sell' if side == 'buy' else 'buy', amt, {'reduceOnly': True})
+                                    self.log(f"🏁 {symbol} 트레일링 스탑 발동. 작전 종료."); break
+                        break
+                time.sleep(30)
             except Exception as e:
-                self.log(f"⚠️ 에러 발생: {e}")
-                time.sleep(10)
+                self.log(f"⚠️ 시스템 오류 발생: {e}"); time.sleep(20)
 
 if __name__ == "__main__":
-    CommanderStrategyV80().run()
+    V80_Final_War().run()
