@@ -31,7 +31,7 @@ class V80_Infinite_Striker:
         except: return None, 0
 
     def check_v80_signal(self, symbol):
-        """[서열+이격도 확인] 5>20>60 확인 및 20-60 이격 과다 체크"""
+        """[이격도 철저 검증] 20-60이 멀면 5-20이 아무리 좋아도 절대 금지"""
         try:
             ohlcv = self.ex.fetch_ohlcv(symbol, timeframe='15m', limit=60)
             df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
@@ -40,25 +40,28 @@ class V80_Infinite_Striker:
             ma60 = df['c'].rolling(60).mean().iloc[-1]
             curr = df['c'].iloc[-1]
             
-            # 1. 완벽 서열 체크
-            is_perfect_long = (ma5 > ma20) and (ma20 > ma60)
-            is_perfect_short = (ma5 < ma20) and (ma20 < ma60)
-            
-            # 2. [사령관님 특명] 20선-60선 이격도 체크 (상투 잡기 방지)
-            # 20선과 60선이 4% 이상 벌어지면 위험 구간으로 판단
+            # 1. 20선과 60선의 이격도 계산 (사령관님 최우선 지침)
             ma_gap = abs(ma20 - ma60) / ma60 * 100
             
-            # 3. 현재가와 20선(생명선) 유격 체크
+            # 2. 현재가와 20선(생명선)의 유격 계산
             curr_gap = abs(curr - ma20) / ma20 * 100
 
-            # 이격도가 4% 이내로 응축되었고, 현재가가 20선 2.5% 이내일 때만 진입
-            if ma_gap <= 4.0 and curr_gap <= 2.5:
-                if is_perfect_long and curr > ma20:
-                    self.log(f"💎 [타점확정] {symbol} 서열/이격 완벽 (이격: {ma_gap:.2f}%)")
-                    return "LONG", curr
-                elif is_perfect_short and curr < ma20:
-                    self.log(f"💀 [타점확정] {symbol} 역배열/이격 완벽 (이격: {ma_gap:.2f}%)")
-                    return "SHORT", curr
+            # [사령관님 명령 반영]
+            # 조건 1: 20-60 간격이 '초촘촘'(2% 이내)해야만 함
+            # 조건 2: 그 상태에서 현재가가 20선에 붙어야 함(2.5% 이내)
+            # 조건 3: 서열이 완벽해야 함
+            
+            if ma_gap <= 2.0: # 1순위: 20-60이 벌어지면 여기서 바로 탈락!
+                if curr_gap <= 2.5: # 2순위: 20선 근처일 때
+                    # 롱 조건: 5 > 20 > 60
+                    if ma5 > ma20 and ma20 > ma60 and curr > ma20:
+                        self.log(f"💎 [수렴타격] {symbol} (20-60이격: {ma_gap:.2f}% / 초촘촘)")
+                        return "LONG", curr
+                    # 숏 조건: 5 < 20 < 60
+                    elif ma5 < ma20 and ma20 < ma60 and curr < ma20:
+                        self.log(f"💀 [수렴타격] {symbol} (20-60이격: {ma_gap:.2f}% / 초촘촘)")
+                        return "SHORT", curr
+            
             return None, curr
         except: return None, 0
 
@@ -72,14 +75,14 @@ class V80_Infinite_Striker:
             self.log(f"🎯 [진격] {symbol} {side} 사격! (화력: {firepower:.2f}USDT)")
             self.ex.create_market_order(symbol, 'buy' if side == "LONG" else 'sell', amount)
             
-            # [방패] ROE -35% 지점 정밀 계산 및 스탑로스 예약
+            # [방패] ROE -35% 시스템 스탑로스 예약
             stop_percent = 0.35 / self.leverage
             raw_stop = entry_price * (1 - stop_percent) if side == "LONG" else entry_price * (1 + stop_percent)
             stop_price = float(self.ex.price_to_precision(symbol, raw_stop))
             
             params = {'stopPrice': stop_price, 'reduceOnly': True}
             self.ex.create_order(symbol, 'STOP_MARKET', 'sell' if side == "LONG" else 'buy', amount, None, params)
-            self.log(f"🛡️ [방패] 스탑로스 완료 (가: {stop_price})")
+            self.log(f"🛡️ [방패] 스탑로스 예약 완료: {stop_price}")
 
             step = 1
             while True:
