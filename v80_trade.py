@@ -1,6 +1,7 @@
-def safety_transfer(exchange, profit_usd, profit_pct):
-    if profit_usd <= 0: return
-    ratio = 0.4 if profit_pct >= 1.0 else 0.3
-    amount = profit_usd * ratio
-    exchange.transfer("USDT", amount, "future", "spot")
-    print(f"💰 {amount} USDT 안전자산 이동 완료!")
+cat << 'EOF' > v80_trade.py
+def calculate_size(balance, price, leverage):
+    # 사령관님 지침: 시드의 45% 투입, 2분할(1차 40%)
+    total_budget = balance * 0.45 * leverage
+    first_entry = total_budget * 0.4 / price
+    return first_entry
+EOF
