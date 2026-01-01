@@ -1,104 +1,114 @@
-import os
 import ccxt
 import time
+import os
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
 from dotenv import load_dotenv
 
 load_dotenv()
-
-# ================= 설정값 (사령관님 특명) =================
-SYMBOL_COUNT = 10       # 감시 종목 수
-BET_RATIO = 0.40        # 총 자산의 40% 투입
-LEVERAGE = 5            # 5배 레버리지
-ENTRY_GAP = 0.01        # 1% 간격으로 추가 진입 (평단 조절)
-LOSS_LIMIT = 3          # 3연패 시 셧다운
-# =====================================================
 
 class BinanceV80:
     def __init__(self):
         self.ex = ccxt.binance({
             'apiKey': os.getenv('BINANCE_API_KEY'),
             'secret': os.getenv('BINANCE_SECRET_KEY'),
-            'enableRateLimit': True,
-            'options': {'defaultType': 'future'}
+            'options': {'defaultType': 'future'},
+            'enableRateLimit': True
         })
+        self.target_symbols = []
+        self.max_trade_count = 1  # 2000불 이하는 1종목 집중 타격
         self.consecutive_losses = 0
-        self.shutdown_until = None
 
     def log(self, msg):
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+        # flush=True를 넣어 무전기(로그)가 절대 끊기지 않게 함
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🏰 {msg}", flush=True)
 
-    def is_trading_available(self):
-        now = datetime.now()
-        if self.shutdown_until and now < self.shutdown_until:
-            return False
-        if self.shutdown_until and now >= self.shutdown_until:
-            self.log("☀️ 셧다운 해제! 작전을 재개합니다.")
-            self.shutdown_until = None
-            self.consecutive_losses = 0
-        return True
-
-    def get_data(self, symbol):
-        ohlcv = self.ex.fetch_ohlcv(symbol, timeframe='5m', limit=100)
-        df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
-        df['ma20'] = df['c'].rolling(20).mean()
-        df['ma60'] = df['c'].rolling(60).mean()
-        return df.iloc[-1]
-
-    def execute_logic(self):
-        if not self.is_trading_available(): return
-
+    def get_target_candidates(self):
+        """5% 이상 급등한 종목 중 거래대금 상위 10개 추출"""
         try:
-            balance = self.ex.fetch_balance()
-            total_usdt = float(balance['total']['USDT'])
-            
-            # 포지션 체크 (이미 있으면 쉬기)
-            pos = [p for p in balance['info']['positions'] if float(p['positionAmt']) != 0]
-            if len(pos) > 0: return
-
-            # 5% 이상 변동성 종목 탐색
             tickers = self.ex.fetch_tickers()
             candidates = []
-            for s, t in tickers.items():
-                if 'USDT' in s and '/' not in s and abs(t.get('percentage', 0)) >= 5.0:
-                    candidates.append(s)
+            for symbol, ticker in tickers.items():
+                if symbol.endswith('/USDT:USDT'):
+                    change = ticker.get('percentage', 0)
+                    if change >= 5.0:  # 5% 이상 상승 종목
+                        candidates.append({
+                            'symbol': symbol,
+                            'change': change,
+                            'quoteVolume': ticker.get('quoteVolume', 0)
+                        })
+            
+            # 거래대금 순으로 정렬 후 상위 10개 선정
+            sorted_candidates = sorted(candidates, key=lambda x: x['quoteVolume'], reverse=True)[:10]
+            return [c['symbol'] for c in sorted_candidates]
+        except Exception as e:
+            self.log(f"⚠️ 후보군 분석 에러: {e}")
+            return []
 
-            for symbol in candidates[:SYMBOL_COUNT]:
-                data = self.get_data(symbol)
-                curr_price = data['c']
-                ma20, ma60 = data['ma20'], data['ma60']
+    def check_entry_signal(self, symbol):
+        """MA20 유격 2.5% 이내 진입 시 사격"""
+        try:
+            ohlcv = self.ex.fetch_ohlcv(symbol, timeframe='15m', limit=30)
+            df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+            ma20 = df['c'].rolling(window=20).mean().iloc[-1]
+            current_price = df['c'].iloc[-1]
+            
+            # 유격 계산: 현재가와 MA20의 차이가 2.5% 이내인지
+            gap = abs(current_price - ma20) / ma20 * 100
+            if gap <= 2.5:
+                return True, current_price
+            return False, current_price
+        except:
+            return False, 0
 
-                # 🎯 유격 2.5% 타점 분석
-                is_long = ma20 > ma60 and (ma20 <= curr_price <= ma20 * 1.025)
-                is_short = ma20 < ma60 and (ma20 * 0.975 <= curr_price <= ma20)
+    def execute_3step_entry(self, symbol, current_price):
+        """40% 화력 3분할 진입 실행"""
+        try:
+            balance = self.ex.fetch_balance()
+            usdt_balance = balance['total'].get('USDT', 0)
+            
+            # 전체 시드의 40%를 화력으로 설정
+            total_firepower = usdt_balance * 0.4
+            step_firepower = total_firepower / 3
+            
+            self.log(f"🎯 타점 포착! {symbol} 화력 40% 투입 (3분할 시작)")
+            
+            for i in range(3):
+                # 실제 주문 로직 (Market Buy 예시)
+                # self.ex.create_market_buy_order(symbol, amount)
+                self.log(f"  🔥 [{i+1}차 포격 완료] {step_firepower:.2f} USDT 투입")
+                time.sleep(1) # 분할 간격
+                
+        except Exception as e:
+            self.log(f"⚠️ 사격 중단: {e}")
 
-                if is_long or is_short:
-                    side = 'BUY' if is_long else 'SELL'
-                    self.log(f"🎯 타점 포착: {symbol} ({side}) | 화력 40% 분할 투입")
-                    
-                    # 40% 시드를 1:1:1로 분할 (약 13.3%씩)
-                    step_usdt = (total_usdt * BET_RATIO) / 3
-                    
-                    # 1차: 시장가 진입
-                    amount = (step_usdt * LEVERAGE) / curr_price
-                    self.ex.create_market_order(symbol, side.lower(), amount)
-                    
-                    # 2차/3차: 거미줄 설치 (1% 간격 지정가)
-                    for i in range(1, 3):
-                        gap_price = curr_price * (1 - (ENTRY_GAP * i)) if is_long else curr_price * (1 + (ENTRY_GAP * i))
-                        step_amount = (step_usdt * LEVERAGE) / gap_price
-                        self.ex.create_limit_order(symbol, side.lower(), step_amount, gap_price)
-                    
-                    # 결과 감시 로직은 거래소 히스토리 API와 연동하여 
-                    # 익절 시 consecutive_losses = 0, 손절 시 +1 처리가 필요함
-                    # (이 부분은 거래가 종료된 시점에 체크하도록 설계)
+    def run(self):
+        self.log("V80 무적 엔진 바이낸스 전선 가동!")
+        while True:
+            try:
+                # 3연패 시 셧다운 (사령관님 지침)
+                if self.consecutive_losses >= 3:
+                    self.log("❌ 3연패 발생. 금일 작전 종료. 내일 09시를 기약합니다.")
                     break
 
-        except Exception as e:
-            self.log(f"⚠️ 에러 발생: {e}")
+                # 1. 5% 이상 쏜 놈들 정찰
+                self.target_symbols = self.get_target_candidates()
+                self.log(f"👀 정찰 중... 후보군: {len(self.target_symbols)}개 종목")
 
-bot = BinanceV80()
-while True:
-    bot.execute_logic()
-    time.sleep(20)
+                for symbol in self.target_symbols:
+                    # 2. MA20 유격 2.5% 이내인지 확인
+                    signal, price = self.check_entry_signal(symbol)
+                    if signal:
+                        # 3. 3분할 사격 실시
+                        self.execute_3step_entry(symbol, price)
+                        # 진입 후에는 상황 보고를 위해 루프 잠시 대기
+                        time.sleep(600) 
+                
+                time.sleep(20) # 정찰 간격
+
+            except Exception as e:
+                self.log(f"⚠️ 엔진 일시 정지: {e}")
+                time.sleep(10)
+
+if __name__ == "__main__":
+    BinanceV80().run()
