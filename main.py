@@ -62,22 +62,26 @@ class BinanceV80:
             return False, 0
 
     def execute_3step_entry(self, symbol, current_price):
-        """40% 화력 3분할 진입 실행"""
+        """진짜 3분할 진입: -1% 간격으로 거미줄 배치"""
         try:
             balance = self.ex.fetch_balance()
             usdt_balance = balance['total'].get('USDT', 0)
             
-            # 전체 시드의 40%를 화력으로 설정
+            # 전체 시드의 40% 화력
             total_firepower = usdt_balance * 0.4
             step_firepower = total_firepower / 3
             
-            self.log(f"🎯 타점 포착! {symbol} 화력 40% 투입 (3분할 시작)")
-            
-            for i in range(3):
-                # 실제 주문 로직 (Market Buy 예시)
-                # self.ex.create_market_buy_order(symbol, amount)
-                self.log(f"  🔥 [{i+1}차 포격 완료] {step_firepower:.2f} USDT 투입")
-                time.sleep(1) # 분할 간격
+            self.log(f"🎯 타점 포착! {symbol} 3분할 거미줄 작전 개시")
+
+            # 1차: 현재가 즉시 사격 (Market)
+            # self.ex.create_market_buy_order(symbol, amount)
+            self.log(f"  🔥 [1차 포격 완료] 현재가 {current_price} 진입")
+
+            # 2차/3차: 지켜보면서 지정가(Limit) 예약 구매 (현재가보다 -1%, -2% 아래)
+            for i in range(1, 3):
+                target_price = current_price * (1 - (0.01 * i)) # -1%, -2% 지점
+                # self.ex.create_limit_buy_order(symbol, amount, target_price)
+                self.log(f"  🕸️ [{i+1}차 매복] {target_price:.4f}에 거미줄 설치 완료")
                 
         except Exception as e:
             self.log(f"⚠️ 사격 중단: {e}")
