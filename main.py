@@ -74,35 +74,32 @@ class V80_Final_Engine:
             return None, 0
 
     def execute_3step_order(self, symbol, side, price):
-        """[3단계] 실전 40% 화력 3분할 거미줄 사격"""
         try:
+            # 1. 현재 총 자산(Total USDT) 기준으로 40% 계산
             bal = self.ex.fetch_balance()
-            usdt_free = bal['free'].get('USDT', 0)
+            total_usdt = bal['total'].get('USDT', 0)
             
-            # 시드 40%를 3분할하여 투입
-            firepower = usdt_free * 0.4
-            step_cash = firepower / 3
-            amount = step_cash / price
+            # 총 화력 40%를 3분할 (약 13.3%씩 3번)
+            # 200불 기준 1회 진입 시 약 26.6불 투입
+            firepower_per_step = (total_usdt * 0.4) / 3 
             
-            self.log(f"🎯 실전 타점 포착! [{symbol} / {side}] 사격 개시")
+            # 레버리지를 감안한 실제 코인 수량(amount) 계산
+            # 레버리지가 10배라면, 26.6불로 266불어치 코인을 사는 셈
+            # 여기서는 증거금(Margin) 기준으로 수량을 맞춥니다.
+            leverage = 10 # 사령관님 레버리지 설정값 (예: 10배)
+            amount = (firepower_per_step * leverage) / price
+            
+            self.log(f"⚔️ 실전 사격! [{symbol}] 회당 {firepower_per_step:.2f} USDT 투입 (시드 대비 13.3%)")
 
             if side == "LONG":
-                # 1차 시장가 롱 진입
                 self.ex.create_market_buy_order(symbol, amount)
-                self.log(f"  🔥 1차 시장가 롱 체결 완료")
-                # 2, 3차 지정가 거미줄 배치 (-1%, -2%)
                 self.ex.create_limit_buy_order(symbol, amount, price * 0.99)
                 self.ex.create_limit_buy_order(symbol, amount, price * 0.98)
-                self.log("  🕸️ 2, 3차 롱 거미줄 매복 완료 (-1%, -2%)")
-
+                
             elif side == "SHORT":
-                # 1차 시장가 숏 진입
                 self.ex.create_market_sell_order(symbol, amount)
-                self.log(f"  🔥 1차 시장가 숏 체결 완료")
-                # 2, 3차 지정가 거미줄 배치 (+1%, +2%)
                 self.ex.create_limit_sell_order(symbol, amount, price * 1.01)
                 self.ex.create_limit_sell_order(symbol, amount, price * 1.02)
-                self.log("  🕸️ 2, 3차 숏 거미줄 매복 완료 (+1%, +2%)")
 
         except Exception as e:
             self.log(f"⚠️ 사격 에러 발생: {e}")
