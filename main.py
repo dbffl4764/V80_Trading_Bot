@@ -1,7 +1,7 @@
-# 1. 꼬여있는 프로세스 전부 정리
+# 1. 기존에 잘못 돌아가는 찌꺼기 프로세스 완전 박멸
 sudo pkill -9 -f python3
 
-# 2. main.py 파일을 완벽한 파이썬 코드로 강제 재생성 (명령어 섞임 방지)
+# 2. main.py 파일을 완벽한 '수익 사수형' 코드로 새로 생성
 cat << 'EOF' > main.py
 import ccxt, time, os, pandas as pd
 from datetime import datetime
@@ -20,7 +20,7 @@ class V80_IronClad_Striker:
         self.leverage = 20
         self.stop_loss_roe = -35.0
         self.half_profit_roe = 100.0
-        self.trail_percent = 1.0
+        self.trail_percent = 1.0  # 고점 대비 1% (사령관님 지시)
         self.half_profit_taken = False
         self.highest_price = 0
 
@@ -36,6 +36,7 @@ class V80_IronClad_Striker:
             m60 = df['c'].rolling(60).mean().iloc[-1]
             curr = df['c'].iloc[-1]
             ma_gap = abs(m20 - m60) / m60 * 100
+            # V80 필터: 이평선 이격도 및 정배열 확인
             if 3.5 <= ma_gap <= 15.0:
                 if m5 > m20 > m60 and curr > m5: return "LONG", curr
                 if m60 > m20 > m5 and curr < m5: return "SHORT", curr
@@ -46,16 +47,23 @@ class V80_IronClad_Striker:
         try:
             self.ex.set_leverage(self.leverage, symbol)
             bal = float(self.ex.fetch_balance()['total']['USDT'])
-            max_pos = 1 if bal < 3000 else (2 if bal < 5000 else (3 if bal < 10000 else 5))
+            
+            # 사령관님 자산 규모별 종목 수 제한
+            if bal < 3000: max_pos = 1
+            elif bal < 5000: max_pos = 2
+            elif bal < 10000: max_pos = 3
+            else: max_pos = 5
+            
             amount = float(self.ex.amount_to_precision(symbol, (bal * 0.4 / max_pos * self.leverage) / entry_price))
             
+            # 1. 진입 및 즉시 손절(SL) 예약
             self.ex.create_market_order(symbol, 'buy' if side == "LONG" else 'sell', amount)
             sl_p = entry_price * (1 - 0.0175) if side == "LONG" else entry_price * (1 + 0.0175)
             self.ex.create_order(symbol, 'STOP_MARKET', 'sell' if side == "LONG" else 'buy', amount, None, {'stopPrice': self.ex.price_to_precision(symbol, sl_p), 'reduceOnly': True})
             
             self.half_profit_taken = False
             self.highest_price = entry_price
-            self.log(f"⚔️ {symbol} {side} 진입완료 (SL: {sl_p})")
+            self.log(f"⚔️ {symbol} {side} 진입완료 (ROE -35% SL 예약됨)")
 
             while True:
                 time.sleep(3)
@@ -67,25 +75,29 @@ class V80_IronClad_Striker:
                 if side == "LONG": self.highest_price = max(self.highest_price, curr)
                 else: self.highest_price = min(self.highest_price, curr)
 
+                # 2. 100% 수익 시 반익절 및 수익권 SL 이동 (똑바로 로직)
                 if not self.half_profit_taken and roe >= self.half_profit_roe:
                     self.ex.cancel_all_orders(symbol)
                     half_qty = float(self.ex.amount_to_precision(symbol, abs(float(pos[0]['positionAmt'])) / 2))
                     self.ex.create_market_order(symbol, 'sell' if side == "LONG" else 'buy', half_qty, {'reduceOnly': True})
+                    
+                    # 남은 절반은 ROE 50% 지점에 방어선 구축
                     safe_p = entry_price * 1.025 if side == "LONG" else entry_price * 0.975
                     self.ex.create_order(symbol, 'STOP_MARKET', 'sell' if side == "LONG" else 'buy', half_qty, None, {'stopPrice': self.ex.price_to_precision(symbol, safe_p), 'reduceOnly': True})
                     self.half_profit_taken = True
-                    self.log(f"💰 반익절 완료! 방어선 구축.")
+                    self.log(f"💰 반익절 완료! 나머지 50%는 ROE 50% 지점 방어선 구축.")
 
+                # 3. Trailing Stop: 고점 대비 1% 하락 시 전량 익절
                 if self.half_profit_taken:
                     drop = (self.highest_price - curr) / self.highest_price * 100 if side == "LONG" else (curr - self.highest_price) / self.highest_price * 100
                     if drop >= self.trail_percent:
                         self.ex.create_market_order(symbol, 'sell' if side == "LONG" else 'buy', abs(float(pos[0]['positionAmt'])), {'reduceOnly': True})
-                        self.log(f"🏁 고점대비 1% 하락 익절! ROE: {roe:.2f}%")
+                        self.log(f"🏁 고점 대비 1% 하락! 수익 똑바로 챙기고 종료합니다. ROE: {roe:.2f}%")
                         break
         except Exception as e: self.log(f"⚠️ 에러: {e}")
 
     def run(self):
-        self.log("🛡️ V80 Iron-Clad 가동 시작")
+        self.log("🛡️ V80 Iron-Clad 20X 가동 시작")
         while True:
             try:
                 tickers = self.ex.fetch_tickers()
@@ -100,6 +112,8 @@ if __name__ == "__main__":
     V80_IronClad_Striker().run()
 EOF
 
-# 3. 백그라운드 실행 및 로그 확인
+# 3. 깨끗한 로그 파일로 실행
 nohup python3 -u main.py > binance.out 2>&1 &
+
+# 4. 실시간 로그 감시
 tail -f binance.out
