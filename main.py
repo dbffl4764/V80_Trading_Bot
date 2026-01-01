@@ -1,11 +1,11 @@
-import ccxt, time, os, pandas as pd, numpy as np
+import ccxt, time, os, pandas as pd
 from datetime import datetime
 from dotenv import load_dotenv
 
 # 구글 클라우드 환경변수 로드
 load_dotenv()
 
-class V80_Elite_AI_Commander:
+class V80_Elite_Final:
     def __init__(self):
         self.ex = ccxt.binance({
             'apiKey': os.getenv('BINANCE_API_KEY'),
@@ -13,30 +13,16 @@ class V80_Elite_AI_Commander:
             'options': {'defaultType': 'future'},
             'enableRateLimit': True
         })
-        # [사령관님 긴급 지침] 2000불 돌파까지 레버리지 5배 고정
+        # [사령관님 지침] 2000불까지 레버리지 5배 고정
         self.leverage = 5 
-        self.log_file = "trading_data.csv"
 
     def log(self, msg):
         now = datetime.now().strftime('%H:%M:%S')
         print(f"[{now}] 🧬 {msg}", flush=True)
 
-    def learn_logic(self):
-        """[AI 자가학습] 실패 데이터를 분석하여 이격 필터를 스스로 강화"""
-        try:
-            if os.path.exists(self.log_file):
-                df = pd.read_csv(self.log_file)
-                if len(df) >= 3:
-                    loss_df = df[df['result'] == 'Loss']
-                    if not loss_df.empty:
-                        return round(loss_df['ma_gap'].mean() * 0.85, 2)
-            return 3.5 # 사령관님 혈통 기본값
-        except: return 3.5
-
     def check_v80_signal(self, symbol):
-        """[사령관님 혈통 로직] 15분봉 정배열/역배열 태동 포착"""
+        """[사령관님 혈통] 15분봉 정배열/역배열 태동 포착"""
         try:
-            dynamic_gap = self.learn_logic()
             ohlcv = self.ex.fetch_ohlcv(symbol, timeframe='15m', limit=60)
             df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
             
@@ -53,48 +39,44 @@ class V80_Elite_AI_Commander:
             ma_gap = abs(c_ma20 - c_ma60) / c_ma60 * 100
             ma5_gap = abs(c_ma5 - c_ma20) / c_ma20 * 100
 
-            # AI 보정 이격폭 내에서만 사격
-            if 1.0 <= ma_gap <= dynamic_gap and ma5_gap <= 2.5:
-                # 정배열 태동 시작 (Golden Cross 초입)
+            # 혈통 필터: 이격 3.5% & 2.5% 이내 수렴 시만 진입
+            if ma_gap <= 3.5 and ma5_gap <= 2.5:
                 if (p_ma5 <= p_ma20) and (c_ma5 > c_ma20 > c_ma60):
-                    return "LONG", curr, ma_gap
-                # 역배열 태동 시작 (Dead Cross 초입)
+                    return "LONG", curr
                 elif (p_ma5 >= p_ma20) and (c_ma60 > c_ma20 > c_ma5):
-                    return "SHORT", curr, ma_gap
-            return None, curr, 0
-        except: return None, 0, 0
+                    return "SHORT", curr
+            return None, curr
+        except: return None, 0
 
     def run(self):
-        self.log("⚔️ V80 ELITE AI COMMANDER 가동! (13불의 복수 시작)")
+        self.log("⚔️ V80 ELITE BLOODLINE 가동 (Clean Build)")
         while True:
             try:
                 bal = float(self.ex.fetch_balance()['total']['USDT'])
                 if bal < 5: break
 
                 tickers = self.ex.fetch_tickers()
-                # 거래량 1억불 이상 주도주만 선별 (잡코인 차단)
-                targets = [s for s, t in tickers.items() if s.endswith('/USDT:USDT') and 'BTC' not in s 
-                           and t.get('quoteVolume', 0) >= 100000000]
-                
-                for s in sorted(targets, key=lambda x: tickers[x].get('quoteVolume', 0), reverse=True)[:15]:
-                    side, price, gap = self.check_v80_signal(s)
-                    if side:
-                        self.ex.set_leverage(self.leverage, s)
-                        # 13불 시드 올인 사격 (레버리지 5배)
-                        qty = float(self.ex.amount_to_precision(s, (bal * 0.95 * self.leverage) / price))
-                        
-                        # [사령관님 지침] 1.75% 즉시 손절 서버 예약
-                        sl_p = float(self.ex.price_to_precision(s, price * 0.9825 if side == "LONG" else price * 1.0175))
-                        
-                        self.ex.create_market_order(s, 'buy' if side == "LONG" else 'sell', qty)
-                        self.ex.create_order(s, 'STOP_MARKET', 'sell' if side == "LONG" else 'buy', qty, None, {'stopPrice': sl_p, 'reduceOnly': True})
-                        self.log(f"🔥 사격 완료: {s} {side} (AI 보정 이격: {gap:.2f}%)")
-                        
-                        time.sleep(600) # 한 번 사격 후 10분간 상황 관망
-                        break
+                # 거래량 순 상위 15개 주도주 타격
+                for s, t in sorted(tickers.items(), key=lambda x: x[1].get('quoteVolume', 0), reverse=True)[:15]:
+                    if s.endswith('/USDT:USDT') and 'BTC' not in s:
+                        side, price = self.check_v80_signal(s)
+                        if side:
+                            self.ex.set_leverage(self.leverage, s)
+                            # 시드 전액 사격 (레버리지 5배)
+                            qty = float(self.ex.amount_to_precision(s, (bal * 0.95 * self.leverage) / price))
+                            
+                            # [지침] 1.75% 즉시 손절 서버 예약
+                            sl_p = float(self.ex.price_to_precision(s, price * 0.9825 if side == "LONG" else price * 1.0175))
+                            
+                            self.ex.create_market_order(s, 'buy' if side == "LONG" else 'sell', qty)
+                            self.ex.create_order(s, 'STOP_MARKET', 'sell' if side == "LONG" else 'buy', qty, None, {'stopPrice': sl_p, 'reduceOnly': True})
+                            self.log(f"🔥 사격: {s} {side} (진입: {price})")
+                            
+                            time.sleep(600) # 10분 대기
+                            break
                 time.sleep(20)
             except Exception as e:
-                self.log(f"⚠️ 에러 보정: {e}"); time.sleep(10)
+                self.log(f"⚠️ 시스템 오류 보정: {e}"); time.sleep(10)
 
 if __name__ == "__main__":
-    V80_Elite_AI_Commander().run()
+    V80_Elite_Final().run()
