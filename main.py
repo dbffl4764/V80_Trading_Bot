@@ -41,15 +41,16 @@ class V80_Infinite_Striker:
             ma60 = df['c'].rolling(60).mean().iloc[-1]
             curr = df['c'].iloc[-1]
             
-            # 사령관님 명령: 20-60 이격 1.5% 이내 (초촘촘)
+            # [사령관님 긴급 수정] 20-60 이격 2.5% (적절한 타협점)
             ma_gap = abs(ma20 - ma60) / ma60 * 100
             curr_gap = abs(curr - ma20) / ma20 * 100
 
-            if ma_gap <= 1.5 and curr_gap <= 2.5:
-                # 서열 확인
+            if ma_gap <= 2.5 and curr_gap <= 2.5:
                 if ma5 > ma20 > ma60 and curr > ma20:
+                    self.log(f"💎 [적정타점] {symbol} (이격: {ma_gap:.2f}%)")
                     return "LONG", curr
                 elif ma5 < ma20 < ma60 and curr < ma20:
+                    self.log(f"💀 [적정타점] {symbol} (이격: {ma_gap:.2f}%)")
                     return "SHORT", curr
             return None, curr
         except: return None, 0
@@ -63,11 +64,10 @@ class V80_Infinite_Striker:
             self.ex.create_market_order(symbol, 'buy' if side == "LONG" else 'sell', amount)
             self.log(f"🎯 [진격] {symbol} {side} 사격 성공!")
 
-            # 방패 설정 (ROE -35%)
+            # 퍼센트 기반 방패 (ROE -35%)
             stop_price = float(self.ex.price_to_precision(symbol, entry_price * 0.965 if side == "LONG" else entry_price * 1.035))
             params = {'stopPrice': stop_price, 'reduceOnly': True, 'workingType': 'MARK_PRICE'}
             
-            # 방패 장착 성공할 때까지 반복
             for i in range(5):
                 try:
                     self.ex.create_order(symbol, 'STOP_MARKET', 'sell' if side == "LONG" else 'buy', amount, None, params)
@@ -83,7 +83,7 @@ class V80_Infinite_Striker:
                 roe = ((curr_p - entry_price) / entry_price * 100 * self.leverage) if side == "LONG" else ((entry_price - curr_p) / entry_price * 100 * self.leverage)
 
                 if roe <= -35.0:
-                    self.log(f"🚨 [손절] 1차분 종료.")
+                    self.log(f"🚨 [손절] 1차분 삭제.")
                     break 
 
                 if step == 1 and roe >= 150.0:
@@ -99,10 +99,10 @@ class V80_Infinite_Striker:
                 if not s: break
                 time.sleep(15)
         except Exception as e:
-            self.log(f"⚠️ 미션 중 에러: {e}")
+            self.log(f"⚠️ 에러: {e}")
 
     def run(self):
-        self.log(f"⚔️ V80 무결점 엔진 가동! (1.5% 촘촘 필터)")
+        self.log(f"⚔️ V80 중도파 엔진 가동! (2.5% 이격 필터)")
         while True:
             try:
                 symbol, amt = self.get_active_symbol()
@@ -110,7 +110,6 @@ class V80_Infinite_Striker:
                     tickers = self.ex.fetch_tickers()
                     candidates = []
                     for s, t in tickers.items():
-                        # 데이터가 없는 경우(None)를 철저히 배제
                         if s.endswith('/USDT:USDT') and t.get('percentage') is not None:
                             if abs(t['percentage']) >= 5.0:
                                 candidates.append({'s': s, 'v': t.get('quoteVolume', 0)})
@@ -127,3 +126,4 @@ class V80_Infinite_Striker:
 
 if __name__ == "__main__":
     V80_Infinite_Striker().run()
+    
