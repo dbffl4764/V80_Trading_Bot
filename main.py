@@ -16,9 +16,10 @@ class V80_5M_Striker:
             'enableRateLimit': True
         })
         self.leverage = 10
-        self.target_roe = 30.0 
+        self.target_roe = 100.0  # 1차 목표 수익률 (50% 익절 지점)
         self.stop_loss_roe = -35.0
-        self.max_entry_count = 3  # [사령관님 지시] 딱 3분할만 한다!
+        self.max_entry_count = 3
+        self.half_profit_taken = False # 반익절 여부 체크
 
     def log(self, msg):
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🧬 {msg}", flush=True)
@@ -48,31 +49,22 @@ class V80_5M_Striker:
 
     def execute_mission(self, symbol, side, entry_price):
         try:
+            self.half_profit_taken = False # 초기화
             total_bal = self.get_total_balance()
             max_pos = 1 if total_bal < 3000 else 2
-            
-            # [3분할 로직] 전체 화력을 3으로 나눠서 진입
             firepower = ((total_bal * 0.45) / max_pos) / self.max_entry_count
             
             for entry_num in range(1, self.max_entry_count + 1):
                 amount = float(self.ex.amount_to_precision(symbol, (firepower * self.leverage) / entry_price))
-                
-                # 포지션 진입
                 self.ex.create_market_order(symbol, 'buy' if side == "LONG" else 'sell', amount)
-                self.log(f"🎯 [사격] {symbol} {side} {entry_num}차 진입! (남은 분할: {self.max_entry_count - entry_num})")
+                self.log(f"🎯 [사격] {symbol} {side} {entry_num}차 진입!")
 
-                # 첫 진입 시에만 손절가 서버 예약
                 if entry_num == 1:
                     stop_p = float(self.ex.price_to_precision(symbol, entry_price * 0.965 if side == "LONG" else entry_price * 1.035))
                     self.ex.create_order(symbol, 'STOP_MARKET', 'sell' if side == "LONG" else 'buy', 
                                          amount * self.max_entry_count, None, {'stopPrice': stop_p, 'reduceOnly': True})
+                time.sleep(1)
 
-                # 추가 분할 매수 사이의 대기 시간 (5분봉 기준이므로 적당한 간격 유지)
-                if entry_num < self.max_entry_count:
-                    self.log(f"⏳ 다음 분할 대기 중... (현재 {entry_num}/{self.max_entry_count})")
-                    time.sleep(30) 
-
-            # 감시 루프
             while True:
                 time.sleep(10)
                 ticker = self.ex.fetch_ticker(symbol)
@@ -84,22 +76,32 @@ class V80_5M_Striker:
                 
                 roe = ((curr - entry_price) / entry_price * 100 * self.leverage) if side == "LONG" else ((entry_price - curr) / entry_price * 100 * self.leverage)
                 
+                # 1. 손절 감시
                 if roe <= self.stop_loss_roe:
                     self.ex.create_market_order(symbol, 'sell' if side == "LONG" else 'buy', current_amt, {'reduceOnly': True})
-                    self.log(f"🚨 [강제 손절] ROE {roe:.2f}% 도달!")
+                    self.log(f"🚨 [손절] ROE {roe:.2f}% 탈출.")
                     break
 
-                if roe > self.target_roe:
+                # 2. 사령관님 지시: 100% 도달 시 50% 던지기
+                if not self.half_profit_taken and roe >= 100.0:
+                    half_amt = float(self.ex.amount_to_precision(symbol, current_amt / 2))
+                    self.ex.create_market_order(symbol, 'sell' if side == "LONG" else 'buy', half_amt, {'reduceOnly': True})
+                    self.half_profit_taken = True
+                    self.log(f"💰 [1차 익절] ROE 100% 달성! 물량 50% 던졌습니다. 이제부터 극대화 모드!")
+
+                # 3. 수익 극대화: 반익절 이후 5일선 이탈 시 전량 익절
+                if self.half_profit_taken:
                     ohlcv = self.ex.fetch_ohlcv(symbol, timeframe='5m', limit=5)
                     ma5 = pd.Series([x[4] for x in ohlcv]).mean()
                     if (side == "LONG" and curr < ma5) or (side == "SHORT" and curr > ma5):
                         self.ex.create_market_order(symbol, 'sell' if side == "LONG" else 'buy', current_amt, {'reduceOnly': True})
-                        self.log(f"💰 [익절] ROE: {roe:.2f}%")
+                        self.log(f"🏁 [최종 익절] 추세 꺾임 감지. 수익 극대화 종료! ROE: {roe:.2f}%")
+                        self.log(f"📢 원칙: 수익의 30% 안전자산 이체하십시오!")
                         break
         except Exception as e: self.log(f"⚠️ 에러: {e}")
 
     def run(self):
-        self.log(f"⚔️ V80 {self.max_entry_count}분할 리미터 가동 중.")
+        self.log(f"⚔️ V80 [100% 반익절/극대화] 가동.")
         while True:
             try:
                 tickers = self.ex.fetch_tickers()
@@ -111,7 +113,7 @@ class V80_5M_Striker:
                             break
                 time.sleep(15)
             except Exception as e: 
-                self.log(f"⚠️ 루프 에러: {e}")
+                self.log(f"⚠️ 에러: {e}")
                 time.sleep(10)
 
 if __name__ == "__main__":
