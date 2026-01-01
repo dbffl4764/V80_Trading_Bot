@@ -2,7 +2,7 @@ import ccxt, time, os, pandas as pd, numpy as np
 from datetime import datetime
 from dotenv import load_dotenv
 
-# 구글 클라우드 환경변수 자동 로드
+# 구글 클라우드 환경변수 로드
 load_dotenv()
 
 class V80_Elite_Full_Force:
@@ -44,6 +44,7 @@ class V80_Elite_Full_Force:
             ma20 = df['c'].rolling(20).mean()
             ma60 = df['c'].rolling(60).mean()
             
+            # 태동 시점 포착을 위한 현재(c)와 직전(p) 비교
             c_ma5, p_ma5 = ma5.iloc[-1], ma5.iloc[-2]
             c_ma20, p_ma20 = ma20.iloc[-1], ma20.iloc[-2]
             c_ma60 = ma60.iloc[-1]
@@ -52,7 +53,7 @@ class V80_Elite_Full_Force:
             ma_gap = abs(c_ma20 - c_ma60) / c_ma60 * 100
             ma5_gap = abs(c_ma5 - c_ma20) / c_ma20 * 100
 
-            # 5% 변동성 임계치 + 혈통 필터
+            # 5% 변동성 임계치 + 응축(ma_gap) + 수렴(ma5_gap)
             if 1.0 <= ma_gap <= dynamic_gap and ma5_gap <= 2.5:
                 # 정배열 태동 (롱)
                 if (p_ma5 <= p_ma20) and (c_ma5 > c_ma20 > c_ma60):
@@ -67,13 +68,16 @@ class V80_Elite_Full_Force:
         self.log("⚔️ V80 ELITE ALL-IN-ONE 가동 (13불 부활 작전)")
         while True:
             try:
+                # 구글 클라우드에서 잔고 실시간 확인
                 bal = float(self.ex.fetch_balance()['total']['USDT'])
-                if bal < 5: break
+                if bal < 5: 
+                    self.log("⚠️ 시드 고갈... 작전 중지"); break
 
-                # [지침] 자산 규모별 종목 수 조절 (13불은 1종목 집중)
+                # [지침] 자산 규모별 종목 수 조절
                 max_pos = 1 if bal < 3000 else (2 if bal < 5000 else 5)
 
                 tickers = self.ex.fetch_tickers()
+                # 거래량 상위 주도주 중 5% 이상 변동성 있는 종목만
                 targets = [s for s, t in tickers.items() if s.endswith('/USDT:USDT') and 'BTC' not in s 
                            and t.get('quoteVolume', 0) >= 100000000 and abs(t.get('percentage', 0)) >= 5.0]
 
