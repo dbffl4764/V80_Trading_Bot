@@ -30,8 +30,8 @@ class BinanceV80:
             candidates = []
             for symbol, ticker in tickers.items():
                 if symbol.endswith('/USDT:USDT'):
-                    change = ticker.get('percentage', 0)
-                    if change >= 5.0:  # 5% 이상 상승 종목
+                    change = ticker.get('percentage')
+                    if change is not None and change >= 5.0:
                         candidates.append({
                             'symbol': symbol,
                             'change': change,
