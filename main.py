@@ -62,29 +62,39 @@ class BinanceV80:
             return False, 0
 
     def execute_3step_entry(self, symbol, current_price):
-        """진짜 3분할 진입: -1% 간격으로 거미줄 배치"""
+        """실전 3분할 사격: 1차 시장가 + 2,3차 지정가(거미줄)"""
         try:
+            # 1. 내 잔고 확인 및 화력(40%) 계산
             balance = self.ex.fetch_balance()
-            usdt_balance = balance['total'].get('USDT', 0)
+            usdt_free = balance['free'].get('USDT', 0)
             
-            # 전체 시드의 40% 화력
-            total_firepower = usdt_balance * 0.4
+            total_firepower = usdt_free * 0.4  # 전체 시드의 40%
             step_firepower = total_firepower / 3
             
-            self.log(f"🎯 타점 포착! {symbol} 3분할 거미줄 작전 개시")
+            self.log(f"⚔️ 실전 투입! {symbol} 화력 40% 투입 작전 개시")
 
-            # 1차: 현재가 즉시 사격 (Market)
-            # self.ex.create_market_buy_order(symbol, amount)
-            self.log(f"  🔥 [1차 포격 완료] 현재가 {current_price} 진입")
+            # 수량 계산 (현재가 기준)
+            amount = step_firepower / current_price
+            
+            # --- [1차 포격: 시장가] ---
+            order1 = self.ex.create_market_buy_order(symbol, amount)
+            self.log(f"  🔥 [1차 시장가 체결] {current_price:.4f}에 포격 완료")
 
-            # 2차/3차: 지켜보면서 지정가(Limit) 예약 구매 (현재가보다 -1%, -2% 아래)
-            for i in range(1, 3):
-                target_price = current_price * (1 - (0.01 * i)) # -1%, -2% 지점
-                # self.ex.create_limit_buy_order(symbol, amount, target_price)
-                self.log(f"  🕸️ [{i+1}차 매복] {target_price:.4f}에 거미줄 설치 완료")
-                
+            # --- [2차/3차 포격: 지정가 매복] ---
+            # 2차: -1% 지점에서 대기
+            price2 = current_price * 0.99
+            self.ex.create_limit_buy_order(symbol, amount, price2)
+            self.log(f"  🕸️ [2차 매복 완료] {price2:.4f} 거미줄 설치")
+
+            # 3차: -2% 지점에서 대기
+            price3 = current_price * 0.98
+            self.ex.create_limit_buy_order(symbol, amount, price3)
+            self.log(f"  🕸️ [3차 매복 완료] {price3:.4f} 거미줄 설치")
+            
+            self.log(f"✅ {symbol} 3분할 배치 끝. 이제 시장이 물어주길 기다립니다.")
+
         except Exception as e:
-            self.log(f"⚠️ 사격 중단: {e}")
+            self.log(f"⚠️ 실전 사격 중 에러 발생: {e}")
 
     def run(self):
         self.log("V80 무적 엔진 바이낸스 전선 가동!")
