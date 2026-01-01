@@ -54,18 +54,30 @@ class V80_Infinite_Striker:
 
     def execute_mission(self, symbol, side, entry_price):
         try:
+            # 1. 시드 계산 및 수량 정밀도 조절
             bal = self.ex.fetch_balance()['free'].get('USDT', 0)
             firepower = (bal * 0.4) / 3 
-            amount = (firepower * self.leverage) / entry_price
+            raw_amount = (firepower * self.leverage) / entry_price
+            amount = float(self.ex.amount_to_precision(symbol, raw_amount))
             
+            # 2. 1차 포격 (시장가)
             self.log(f"🎯 [진격] {symbol} {side} 사격! (화력: {firepower:.2f}USDT)")
             self.ex.create_market_order(symbol, 'buy' if side == "LONG" else 'sell', amount)
             
-            # [방패] 시스템 스탑로스 즉시 예약
-            stop_price = entry_price * 0.965 if side == "LONG" else entry_price * 1.035
-            params = {'stopPrice': self.ex.price_to_precision(symbol, stop_price), 'reduceOnly': True}
+            # 3. [방패] ROE -35% 지점 정밀 계산 (레버리지 10배 기준 -3.5%)
+            stop_percent = 0.35 / self.leverage
+            if side == "LONG":
+                raw_stop = entry_price * (1 - stop_percent)
+            else:
+                raw_stop = entry_price * (1 + stop_percent)
+            
+            # 바이낸스 가격 소수점 정밀도에 맞춤
+            stop_price = float(self.ex.price_to_precision(symbol, raw_stop))
+            
+            # 즉시 스탑로스 예약 (STOP_MARKET)
+            params = {'stopPrice': stop_price, 'reduceOnly': True}
             self.ex.create_order(symbol, 'STOP_MARKET', 'sell' if side == "LONG" else 'buy', amount, None, params)
-            self.log(f"🛡️ [시스템 방어] -35% 지점에 스탑로스 예약 완료")
+            self.log(f"🛡️ [방패] -35% 스탑로스 완료 (가: {stop_price})")
 
             step = 1
             while True:
@@ -77,6 +89,7 @@ class V80_Infinite_Striker:
                     self.log(f"🚨 [손절] 1차분 삭제!")
                     break 
 
+                # 4. 불타기 (150%, 300%)
                 if step == 1 and roe >= 150.0:
                     self.log(f"🔥 [불타기] 150% 돌파! 2차 투입!")
                     self.ex.create_market_order(symbol, 'buy' if side == "LONG" else 'sell', amount)
@@ -99,6 +112,7 @@ class V80_Infinite_Striker:
             try:
                 symbol, amt = self.get_active_symbol()
                 if amt == 0:
+                    self.log("👀 정찰 중...")
                     tickers = self.ex.fetch_tickers()
                     candidates = []
                     for s, t in tickers.items():
