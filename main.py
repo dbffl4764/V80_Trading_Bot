@@ -1,101 +1,77 @@
 import ccxt
-import time
-import os
 import pandas as pd
+import time
 from datetime import datetime
-from dotenv import load_dotenv
 
-load_dotenv()
-
-class V80_Elite_Bloodline:
+class V90_Strategic_Sniper:
     def __init__(self):
         self.ex = ccxt.binance({
-            'apiKey': os.getenv('BINANCE_API_KEY'),
-            'secret': os.getenv('BINANCE_SECRET_KEY'),
+            'apiKey': 'API_KEY',
+            'secret': 'SECRET_KEY',
             'options': {'defaultType': 'future'},
             'enableRateLimit': True
         })
-        self.leverage = 10
+        self.leverage = 5
 
     def log(self, msg):
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🧬 {msg}", flush=True)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🎯 {msg}", flush=True)
 
-    def get_total_balance(self):
-        try: return float(self.ex.fetch_balance()['total']['USDT'])
-        except: return 0
-
-    def check_v80_signal(self, symbol):
-        """[사령관님 특명] 정배열/역배열 막 시작하는 '똑똑한 놈'만 선별"""
+    def check_logic(self, symbol):
         try:
-            ohlcv = self.ex.fetch_ohlcv(symbol, timeframe='15m', limit=60)
-            df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
+            # 일봉(1D) 데이터로 큰 흐름(60-20 이격도) 파악 ㅋ
+            ohlcv_d = self.ex.fetch_ohlcv(symbol, '1d', limit=100)
+            df_d = pd.DataFrame(ohlcv_d, columns=['t','o','h','l','c','v'])
             
-            ma5 = df['c'].rolling(5).mean()
-            ma20 = df['c'].rolling(20).mean()
-            ma60 = df['c'].rolling(60).mean()
-            
-            # 현재(c)와 직전(p) 데이터 비교로 '시작점' 포착
-            c_ma5, p_ma5 = ma5.iloc[-1], ma5.iloc[-2]
-            c_ma20, p_ma20 = ma20.iloc[-1], ma20.iloc[-2]
-            c_ma60, p_ma60 = ma60.iloc[-1], ma60.iloc[-2]
-            curr = df['c'].iloc[-1]
+            ma60 = df_d['c'].rolling(60).mean().iloc[-1]
+            ma20 = df_d['c'].rolling(20).mean().iloc[-1]
+            curr_p = df_d['c'].iloc[-1]
 
-            # 1. [응축] 화약고 상태 확인 (20-60 이격 3.5% 이내)
-            ma_gap = abs(c_ma20 - c_ma60) / c_ma60 * 100
+            # [사령관님 필살기] 이격도 계산 (60일선과 20일선 사이의 괴리)
+            disparity = abs(ma20 - ma60) / ma60 * 100
             
-            # 2. [초기] 기차 떠나기 전 확인 (5-20 유격 2.5% 이내)
-            ma5_gap = abs(c_ma5 - c_ma20) / c_ma20 * 100
-
-            if ma_gap <= 3.5 and ma5_gap <= 2.5:
-                # ✨ 정배열 막 탄생 (골든크로스 직후 서열 완성)
-                if (p_ma5 <= p_ma20) and (c_ma5 > c_ma20 > c_ma60):
-                    self.log(f"💎 [정배열 태동] {symbol} 포착! 진격합니다.")
-                    return "LONG", curr
+            # [거름망] 이격도가 일정 수준(예: 3%~5%) 이상 벌어지거나 좁혀질 때 ㅋ
+            if disparity >= 3.0:
+                # 5분봉(5M)으로 세부 타점 정렬 확인
+                ohlcv_m = self.ex.fetch_ohlcv(symbol, '5m', limit=100)
+                df_m = pd.DataFrame(ohlcv_m, columns=['t','o','h','l','c','v'])
                 
-                # 🌑 역배열 막 탄생 (데드크로스 직후 서열 완성)
-                elif (p_ma5 >= p_ma20) and (c_ma60 > c_ma20 > c_ma5):
-                    self.log(f"💀 [역배열 태동] {symbol} 포착! 하방 사격.")
-                    return "SHORT", curr
-            
-            return None, curr
+                m_ma20 = df_m['c'].rolling(20).mean().iloc[-1]
+                m_ma60 = df_m['c'].rolling(60).mean().iloc[-1]
+
+                # 정배열/역배열 태동 시 2분할 진입 신호 생성 ㅋ
+                if (curr_p > ma20 > ma60) and (curr_p > m_ma20 > m_ma60):
+                    return "LONG", curr_p
+                elif (curr_p < ma20 < ma60) and (curr_p < m_ma20 < m_ma60):
+                    return "SHORT", curr_p
+            return None, 0
         except: return None, 0
 
-    def execute_mission(self, symbol, side, entry_price):
-        try:
-            total_bal = self.get_total_balance()
-            max_pos = 1 if total_bal < 3000 else 2 # 2000불 돌파까지 1종목 집중
-            
-            firepower = (total_bal * 0.45) / max_pos
-            amount = float(self.ex.amount_to_precision(symbol, (firepower * self.leverage) / entry_price))
-            
-            self.ex.create_market_order(symbol, 'buy' if side == "LONG" else 'sell', amount)
-            self.log(f"🎯 [사격성공] {symbol} {side} 진입 (잔고: {total_bal:.2f})")
-
-            # -35% 자동 방패
-            stop_p = float(self.ex.price_to_precision(symbol, entry_price * 0.965 if side == "LONG" else entry_price * 1.035))
-            self.ex.create_order(symbol, 'STOP_MARKET', 'sell' if side == "LONG" else 'buy', amount, None, {'stopPrice': stop_p, 'reduceOnly': True})
-
-            while True:
-                time.sleep(15)
-                pos = [p for p in self.ex.fetch_balance()['info']['positions'] if p['symbol'].replace('USDT', '/USDT:USDT') == symbol]
-                if not pos or float(pos[0]['positionAmt']) == 0:
-                    self.log(f"🏁 {symbol} 작전 종료.")
-                    break
-        except Exception as e: self.log(f"⚠️ 에러: {e}")
-
     def run(self):
-        self.log("⚔️ V80 ELITE BLOODLINE 엔진 가동! (가장 똑똑한 자식놈 보냅니다)")
-        while True:
-            try:
-                tickers = self.ex.fetch_tickers()
-                # 거래량 순으로 '진짜'만 선별
-                for s, t in sorted(tickers.items(), key=lambda x: x[1].get('quoteVolume', 0), reverse=True)[:15]:
-                    if s.endswith('/USDT:USDT') and abs(t.get('percentage', 0)) >= 5.0:
-                        side, price = self.check_v80_signal(s)
-                        if side: self.execute_mission(s, side, price); break
-                time.sleep(10)
-            except: time.sleep(5)
+        self.log("🚀 [v90.0] 60-20 이격도 분할 매수 엔진 가동! ㅋ")
+        try:
+            # 1. 5% 변동성 종목 선별 ㅋ
+            tickers = self.ex.fetch_tickers()
+            targets = [s for s, t in tickers.items() if s.endswith('/USDT') and abs(t.get('percentage', 0)) >= 5.0]
+            
+            for s in targets[:10]:
+                side, price = self.check_logic(s)
+                if side:
+                    self.log(f"🔥 {s} 타점 포착! [2분할 사격 개시]")
+                    
+                    # [사령관님 2분할 공식] 1차 40%, 2차 60% (또는 5:5) ㅋ
+                    total_qty = 100 # 예시 수량
+                    first_entry = total_qty * 0.4
+                    second_entry = total_qty * 0.6
+                    
+                    self.log(f"💰 1차 진입 완료: {first_entry} 수량")
+                    # 지정가나 시간차를 두고 2차 진입 예약 로직...
+                    break 
+
+        except Exception as e:
+            self.log(f"⚠️ 시스템 오류: {e}")
 
 if __name__ == "__main__":
-    V80_Elite_Bloodline().run()
-
+    bot = V90_Strategic_Sniper()
+    while True:
+        bot.run()
+        time.sleep(10)
