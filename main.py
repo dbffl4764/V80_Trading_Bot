@@ -24,27 +24,34 @@ class BinanceV80:
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🏰 {msg}", flush=True)
 
     def get_target_candidates(self):
-        """5% 이상 급등한 종목 중 거래대금 상위 10개 추출"""
+        """거래 가능 상태인 종목 중 5% 이상 급등주 추출"""
         try:
+            markets = self.ex.load_markets() # 종목 정보 로드
             tickers = self.ex.fetch_tickers()
             candidates = []
-            for symbol, ticker in tickers.items():
-                if symbol.endswith('/USDT:USDT'):
-                    change = ticker.get('percentage')
-                    if change is not None and change >= 5.0:
-                        candidates.append({
-                            'symbol': symbol,
-                            'change': change,
-                            'quoteVolume': ticker.get('quoteVolume', 0)
-                        })
             
-            # 거래대금 순으로 정렬 후 상위 10개 선정
+            for symbol, ticker in tickers.items():
+                # 1. 선물 종목인지 확인
+                if symbol.endswith('/USDT:USDT'):
+                    # 2. 거래 가능 상태(active)인지 확인 (매우 중요!)
+                    market_info = markets.get(symbol)
+                    if market_info and market_info.get('active') is True:
+                        
+                        change = ticker.get('percentage')
+                        # 3. 데이터가 존재하고 5% 이상 상승했는지 확인
+                        if change is not None and change >= 5.0:
+                            candidates.append({
+                                'symbol': symbol,
+                                'change': change,
+                                'quoteVolume': ticker.get('quoteVolume', 0)
+                            })
+            
+            # 거래대금 상위 10개로 정렬
             sorted_candidates = sorted(candidates, key=lambda x: x['quoteVolume'], reverse=True)[:10]
             return [c['symbol'] for c in sorted_candidates]
         except Exception as e:
             self.log(f"⚠️ 후보군 분석 에러: {e}")
             return []
-
     def check_entry_signal(self, symbol):
         """MA20 유격 2.5% 이내 진입 시 사격"""
         try:
