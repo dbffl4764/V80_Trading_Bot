@@ -1,12 +1,13 @@
-import ccxt, time, pandas as pd, numpy as np
+\import ccxt, time, os, pandas as pd, numpy as np
 from datetime import datetime
 
-class V80_Elite_Final_Survivor:
-    def __init__(self, api_key, secret_key):
-        # 구글 클라우드 배포 시 직접 입력받은 키를 사용하도록 설정
+class V80_Elite_Pure_Force:
+    def __init__(self):
+        # 구글 클라우드 콘솔에 직접 입력하신 환경변수를 읽어옵니다.
+        # (혹은 '키값'을 직접 따옴표 안에 넣으셔도 됩니다)
         self.ex = ccxt.binance({
-            'apiKey': api_key,
-            'secret': secret_key,
+            'apiKey': os.environ.get('BINANCE_API_KEY', '여기에_직접_입력하셔도_됨'),
+            'secret': os.environ.get('BINANCE_SECRET_KEY', '여기에_직접_입력하셔도_됨'),
             'options': {'defaultType': 'future'},
             'enableRateLimit': True
         })
@@ -19,7 +20,7 @@ class V80_Elite_Final_Survivor:
         print(f"[{now}] 🧬 {msg}", flush=True)
 
     def check_v80_signal(self, symbol):
-        """[사령관님 혈통] 15분봉 정배열/역배열 태동 포착"""
+        """[사령관님 혈통 로직] 15분봉 정배열/역배열 태동 포착"""
         try:
             ohlcv = self.ex.fetch_ohlcv(symbol, timeframe='15m', limit=60)
             df = pd.DataFrame(ohlcv, columns=['t', 'o', 'h', 'l', 'c', 'v'])
@@ -33,13 +34,15 @@ class V80_Elite_Final_Survivor:
             c_ma60 = ma60.iloc[-1]
             curr = df['c'].iloc[-1]
 
-            # [응축/수렴 필터] 3.5% & 2.5%
+            # [응축/수렴 필터] 사령관님 병법의 핵심 (3.5% & 2.5%)
             ma_gap = abs(c_ma20 - c_ma60) / c_ma60 * 100
             ma5_gap = abs(c_ma5 - c_ma20) / c_ma20 * 100
 
             if ma_gap <= 3.5 and ma5_gap <= 2.5:
+                # ✨ 정배열 막 탄생 (롱 타점)
                 if (p_ma5 <= p_ma20) and (c_ma5 > c_ma20 > c_ma60):
                     return "LONG", curr
+                # 🌑 역배열 막 탄생 (숏 타점)
                 elif (p_ma5 >= p_ma20) and (c_ma60 > c_ma20 > c_ma5):
                     return "SHORT", curr
             return None, curr
@@ -47,13 +50,15 @@ class V80_Elite_Final_Survivor:
             return None, 0
 
     def run(self):
-        self.log("⚔️ V80 ELITE FINAL SURVIVOR 가동 (13불 부활 작전)")
+        self.log("⚔️ V80 ELITE PURE FORCE 가동 (13불 부활 작전)")
         while True:
             try:
+                # 잔고 확인 (구글 클라우드 환경에서 API 연결 테스트 겸용)
                 bal = float(self.ex.fetch_balance()['total']['USDT'])
-                if bal < 5: break
+                if bal < 5: 
+                    self.log("⚠️ 시드 부족... 작전 종료"); break
 
-                # [지침] 13불일 때는 1종목 집중 사격
+                # [지침] 13불일 때는 무조건 1종목 집중
                 max_pos = 1 if bal < 3000 else 2
 
                 # [지침] 변동성 5% 이상 + 거래량 상위 10개 추출
@@ -67,26 +72,23 @@ class V80_Elite_Final_Survivor:
                     side, price = self.check_v80_signal(s)
                     if side:
                         self.ex.set_leverage(self.leverage, s)
+                        # 화력 45% 사격
                         qty = float(self.ex.amount_to_precision(s, (bal * 0.45 * self.leverage) / price))
                         
-                        # [지침] 1.75% 즉시 손절 자동 예약
+                        # [지침] 1.75% 칼손절 예약 (방패)
                         sl_p = float(self.ex.price_to_precision(s, price * 0.9825 if side == "LONG" else price * 1.0175))
                         
                         self.ex.create_market_order(s, 'buy' if side == "LONG" else 'sell', qty)
                         self.ex.create_order(s, 'STOP_MARKET', 'sell' if side == "LONG" else 'buy', qty, None, {'stopPrice': sl_p, 'reduceOnly': True})
                         
                         self.log(f"🎯 [사격 완료] {s} {side} 진입 (잔고: {bal:.2f})")
-                        time.sleep(600) 
+                        time.sleep(600) # 10분 관망
                         break
                 
-                time.sleep(20)
+                time.sleep(20) # 스캔 주기
             except Exception as e:
                 self.log(f"⚠️ 시스템 오류 보정: {e}")
                 time.sleep(15)
 
 if __name__ == "__main__":
-    # 🚨 여기에 사령관님의 API 키를 직접 따옴표('') 안에 적어주세요!
-    MY_API_KEY = '사령관님의_실제_API_KEY'
-    MY_SECRET_KEY = '사령관님의_실제_SECRET_KEY'
-    
-    V80_Elite_Final_Survivor(MY_API_KEY, MY_SECRET_KEY).run()
+    V80_Elite_Pure_Force().run()
